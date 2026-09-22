@@ -1,0 +1,20 @@
+# AquesTalk proprietary binaries / SDK
+internal/providers/tts/aquestalk/aqtk1_win/
+
+# Generated audio
+*.wav
+
+# Build outputs
+*.exe
+*.dll
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
