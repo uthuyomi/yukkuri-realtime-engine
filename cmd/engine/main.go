@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
-	"io"
 	"log"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/engine"
-	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/tts"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/tts/aquestalk"
+	httptransport "github.com/uthuyomi/yukkuri-realtime-engine/internal/transport/http"
 )
 
 func main() {
@@ -16,8 +19,22 @@ func main() {
 
 	e := engine.New()
 
+	const aqRoot = `internal\providers\tts\aquestalk\aqtk1_win\lib64`
+
 	aq, err := aquestalk.New(aquestalk.Config{
-		DLLPath: `internal\providers\tts\aquestalk\aqtk1_win\lib64\f1\AquesTalk.dll`,
+		DefaultVoice: "f1",
+
+		Voices: map[string]string{
+			"f1":   filepath.Join(aqRoot, "f1", "AquesTalk.dll"),
+			"f2":   filepath.Join(aqRoot, "f2", "AquesTalk.dll"),
+			"f3":   filepath.Join(aqRoot, "f3", "AquesTalk.dll"),
+			"m1":   filepath.Join(aqRoot, "m1", "AquesTalk.dll"),
+			"m2":   filepath.Join(aqRoot, "m2", "AquesTalk.dll"),
+			"r1":   filepath.Join(aqRoot, "r1", "AquesTalk.dll"),
+			"dvd":  filepath.Join(aqRoot, "dvd", "AquesTalk.dll"),
+			"imd1": filepath.Join(aqRoot, "imd1", "AquesTalk.dll"),
+			"jgr":  filepath.Join(aqRoot, "jgr", "AquesTalk.dll"),
+		},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -27,33 +44,51 @@ func main() {
 		log.Fatal(err)
 	}
 
-	stream, err := e.Synthesize(
-		context.Background(),
-		"aquestalk",
-		tts.Request{
-			Text:  "ゆっくりしていってね",
-			Voice: "f1",
-			Speed: 1.0,
-		},
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer stream.Audio.Close()
-
-	out, err := os.Create("yukkuri.wav")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, stream.Audio); err != nil {
-		log.Fatal(err)
-	}
-
 	log.Printf(
-		"synthesis complete: yukkuri.wav (%d Hz, %d channel)",
-		stream.Format.SampleRate,
-		stream.Format.Channels,
+		"AquesTalk voices loaded: %v",
+		aq.VoiceNames(),
 	)
+
+	server := httptransport.New(
+		httptransport.Config{
+			Address: "127.0.0.1:8765",
+		},
+		e,
+	)
+
+	errCh := make(chan error, 1)
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil {
+			errCh <- err
+		}
+	}()
+
+	signalCh := make(chan os.Signal, 1)
+
+	signal.Notify(
+		signalCh,
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+
+	select {
+	case sig := <-signalCh:
+		log.Printf("received signal: %s", sig)
+
+	case err := <-errCh:
+		log.Fatalf("HTTP server failed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second,
+	)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("HTTP shutdown error: %v", err)
+	}
+
+	log.Println("Yukkuri Realtime Engine stopped")
 }

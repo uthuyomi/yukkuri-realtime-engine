@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"sort"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -21,7 +23,21 @@ const (
 	maxSpeed     = 300
 )
 
+type Config struct {
+	Voices       map[string]string
+	DefaultVoice string
+
+	DevKey string
+	UsrKey string
+}
+
 type Provider struct {
+	voices       map[string]*voice
+	defaultVoice string
+}
+
+type voice struct {
+	name    string
 	dllPath string
 
 	dll       *syscall.LazyDLL
@@ -31,30 +47,88 @@ type Provider struct {
 	setUsrKey *syscall.LazyProc
 }
 
-type Config struct {
-	DLLPath string
-
-	DevKey string
-	UsrKey string
-}
-
 func New(config Config) (*Provider, error) {
-	if config.DLLPath == "" {
-		return nil, fmt.Errorf("AquesTalk DLL path is empty")
+	if len(config.Voices) == 0 {
+		return nil, fmt.Errorf("no AquesTalk voices configured")
 	}
 
-	if _, err := os.Stat(config.DLLPath); err != nil {
+	p := &Provider{
+		voices: make(map[string]*voice, len(config.Voices)),
+	}
+
+	for name, dllPath := range config.Voices {
+		name = normalizeVoiceName(name)
+
+		if name == "" {
+			return nil, fmt.Errorf("AquesTalk voice name is empty")
+		}
+
+		if dllPath == "" {
+			return nil, fmt.Errorf(
+				"AquesTalk DLL path for voice %q is empty",
+				name,
+			)
+		}
+
+		if _, exists := p.voices[name]; exists {
+			return nil, fmt.Errorf(
+				"AquesTalk voice %q is configured more than once",
+				name,
+			)
+		}
+
+		v, err := loadVoice(
+			name,
+			dllPath,
+			config.DevKey,
+			config.UsrKey,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		p.voices[name] = v
+	}
+
+	defaultVoice := normalizeVoiceName(config.DefaultVoice)
+
+	if defaultVoice == "" {
+		names := p.VoiceNames()
+		defaultVoice = names[0]
+	}
+
+	if _, exists := p.voices[defaultVoice]; !exists {
 		return nil, fmt.Errorf(
-			"AquesTalk DLL not found: %s: %w",
-			config.DLLPath,
+			"default AquesTalk voice %q is not configured",
+			defaultVoice,
+		)
+	}
+
+	p.defaultVoice = defaultVoice
+
+	return p, nil
+}
+
+func loadVoice(
+	name string,
+	dllPath string,
+	devKey string,
+	usrKey string,
+) (*voice, error) {
+	if _, err := os.Stat(dllPath); err != nil {
+		return nil, fmt.Errorf(
+			"AquesTalk DLL for voice %q not found: %s: %w",
+			name,
+			dllPath,
 			err,
 		)
 	}
 
-	dll := syscall.NewLazyDLL(config.DLLPath)
+	dll := syscall.NewLazyDLL(dllPath)
 
-	p := &Provider{
-		dllPath:   config.DLLPath,
+	v := &voice{
+		name:      name,
+		dllPath:   dllPath,
 		dll:       dll,
 		synthe:    dll.NewProc("AquesTalk_Synthe_Utf8"),
 		freeWave:  dll.NewProc("AquesTalk_FreeWave"),
@@ -62,36 +136,67 @@ func New(config Config) (*Provider, error) {
 		setUsrKey: dll.NewProc("AquesTalk_SetUsrKey"),
 	}
 
-	// DLLと必須シンボルをここで検証する。
-	if err := p.dll.Load(); err != nil {
-		return nil, fmt.Errorf("failed to load AquesTalk DLL: %w", err)
+	if err := v.dll.Load(); err != nil {
+		return nil, fmt.Errorf(
+			"failed to load AquesTalk voice %q: %w",
+			name,
+			err,
+		)
 	}
 
-	if err := p.synthe.Find(); err != nil {
-		return nil, fmt.Errorf("AquesTalk_Synthe_Utf8 not found: %w", err)
+	if err := v.synthe.Find(); err != nil {
+		return nil, fmt.Errorf(
+			"AquesTalk_Synthe_Utf8 not found for voice %q: %w",
+			name,
+			err,
+		)
 	}
 
-	if err := p.freeWave.Find(); err != nil {
-		return nil, fmt.Errorf("AquesTalk_FreeWave not found: %w", err)
+	if err := v.freeWave.Find(); err != nil {
+		return nil, fmt.Errorf(
+			"AquesTalk_FreeWave not found for voice %q: %w",
+			name,
+			err,
+		)
 	}
 
-	if config.DevKey != "" {
-		if err := p.setKey(p.setDevKey, config.DevKey); err != nil {
-			return nil, fmt.Errorf("failed to set AquesTalk development key: %w", err)
+	if devKey != "" {
+		if err := setKey(v.setDevKey, devKey); err != nil {
+			return nil, fmt.Errorf(
+				"failed to set development key for voice %q: %w",
+				name,
+				err,
+			)
 		}
 	}
 
-	if config.UsrKey != "" {
-		if err := p.setKey(p.setUsrKey, config.UsrKey); err != nil {
-			return nil, fmt.Errorf("failed to set AquesTalk user key: %w", err)
+	if usrKey != "" {
+		if err := setKey(v.setUsrKey, usrKey); err != nil {
+			return nil, fmt.Errorf(
+				"failed to set user key for voice %q: %w",
+				name,
+				err,
+			)
 		}
 	}
 
-	return p, nil
+	return v, nil
 }
 
 func (p *Provider) Name() string {
 	return "aquestalk"
+}
+
+func (p *Provider) VoiceNames() []string {
+	names := make([]string, 0, len(p.voices))
+
+	for name := range p.voices {
+		names = append(names, name)
+	}
+
+	sort.Strings(names)
+
+	return names
 }
 
 func (p *Provider) Synthesize(
@@ -106,10 +211,24 @@ func (p *Provider) Synthesize(
 		return nil, fmt.Errorf("speech text is empty")
 	}
 
+	voiceName := normalizeVoiceName(req.Voice)
+
+	if voiceName == "" || voiceName == "default" {
+		voiceName = p.defaultVoice
+	}
+
+	v, exists := p.voices[voiceName]
+	if !exists {
+		return nil, fmt.Errorf(
+			"AquesTalk voice %q is not configured; available voices: %s",
+			voiceName,
+			strings.Join(p.VoiceNames(), ", "),
+		)
+	}
+
 	speed := defaultSpeed
 
 	if req.Speed > 0 {
-		// 共通APIでは1.0を標準速度として扱う。
 		speed = int(req.Speed * 100)
 	}
 
@@ -123,33 +242,48 @@ func (p *Provider) Synthesize(
 
 	koe, err := syscall.BytePtrFromString(req.Text)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode speech text: %w", err)
+		return nil, fmt.Errorf(
+			"failed to encode AquesTalk input: %w",
+			err,
+		)
 	}
 
 	var size int32
 
-	wavPtr, _, _ := p.synthe.Call(
+	wavPtr, _, _ := v.synthe.Call(
 		uintptr(unsafe.Pointer(koe)),
 		uintptr(speed),
 		uintptr(unsafe.Pointer(&size)),
 	)
 
+	runtime.KeepAlive(koe)
+
 	if wavPtr == 0 {
 		return nil, fmt.Errorf(
-			"AquesTalk synthesis failed with error code %d",
+			"AquesTalk voice %q synthesis failed with error code %d",
+			voiceName,
 			size,
 		)
 	}
 
-	// AquesTalkが確保したメモリをGo側へコピーする。
-	// コピー後はDLL側の領域を即座に解放できる。
-	wav := unsafe.Slice((*byte)(unsafe.Pointer(wavPtr)), int(size))
+	if size <= 0 {
+		v.freeWave.Call(wavPtr)
+
+		return nil, fmt.Errorf(
+			"AquesTalk voice %q returned invalid WAV size %d",
+			voiceName,
+			size,
+		)
+	}
+
+	wav := unsafe.Slice(
+		(*byte)(unsafe.Pointer(wavPtr)),
+		int(size),
+	)
+
 	data := append([]byte(nil), wav...)
 
-	p.freeWave.Call(wavPtr)
-
-	// FFI呼び出しが終わるまでポインタを生存させる。
-	runtime.KeepAlive(koe)
+	v.freeWave.Call(wavPtr)
 
 	return &tts.Stream{
 		Format: tts.AudioFormat{
@@ -161,7 +295,7 @@ func (p *Provider) Synthesize(
 	}, nil
 }
 
-func (p *Provider) setKey(proc *syscall.LazyProc, key string) error {
+func setKey(proc *syscall.LazyProc, key string) error {
 	if err := proc.Find(); err != nil {
 		return err
 	}
@@ -182,4 +316,8 @@ func (p *Provider) setKey(proc *syscall.LazyProc, key string) error {
 	}
 
 	return nil
+}
+
+func normalizeVoiceName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
