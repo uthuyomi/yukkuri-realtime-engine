@@ -32,6 +32,7 @@ func New(config Config, e *engine.Engine) *Server {
 
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /v1/audio/speech", s.handleSpeech)
+	mux.HandleFunc("GET /v1/realtime", s.handleRealtime)
 
 	s.server = &http.Server{
 		Addr:              config.Address,

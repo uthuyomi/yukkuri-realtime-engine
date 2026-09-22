@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Yukkuri Realtime Test</title>
+</head>
+<body>
+    <h1>Yukkuri Realtime Test</h1>
+
+    <script>
+    const ws = new WebSocket(
+        "ws://127.0.0.1:8765/v1/realtime"
+    );
+
+    ws.binaryType = "arraybuffer";
+
+    const audioChunks = [];
+
+    ws.onopen = () => {
+        console.log("CONNECTED");
+    };
+
+    ws.onmessage = (event) => {
+        if (typeof event.data === "string") {
+            const message = JSON.parse(event.data);
+
+            console.log("EVENT:", message);
+
+            if (message.type === "response.audio.started") {
+                audioChunks.length = 0;
+            }
+
+            if (message.type === "response.audio.done") {
+                const blob = new Blob(
+                    audioChunks,
+                    {
+                        type: "audio/wav"
+                    }
+                );
+
+                const url = URL.createObjectURL(blob);
+
+                const audio = new Audio(url);
+
+                audio.play();
+
+                audio.onended = () => {
+                    URL.revokeObjectURL(url);
+                };
+            }
+
+            return;
+        }
+
+        if (event.data instanceof ArrayBuffer) {
+            console.log(
+                "AUDIO CHUNK:",
+                event.data.byteLength,
+                "bytes"
+            );
+
+            audioChunks.push(event.data);
+        }
+    };
+
+    ws.onerror = (event) => {
+        console.error("WS ERROR:", event);
+    };
+
+    ws.onclose = (event) => {
+        console.log(
+            "CLOSED:",
+            event.code,
+            event.reason
+        );
+    };
+
+    window.ws = ws;
+</script>
+</body>
+</html>
