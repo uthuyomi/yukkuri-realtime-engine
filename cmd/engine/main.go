@@ -20,6 +20,7 @@ func main() {
 	e := engine.New()
 
 	const aqRoot = `internal\providers\tts\aquestalk\aqtk1_win\lib64`
+	const aqk2kRoot = `internal\providers\tts\aquestalk\aqk2k_win`
 
 	aq, err := aquestalk.New(aquestalk.Config{
 		DefaultVoice: "f1",
@@ -35,10 +36,23 @@ func main() {
 			"imd1": filepath.Join(aqRoot, "imd1", "AquesTalk.dll"),
 			"jgr":  filepath.Join(aqRoot, "jgr", "AquesTalk.dll"),
 		},
+
+		Kanji2KoeDLL: filepath.Join(
+			aqk2kRoot,
+			"lib64",
+			"AqKanji2Koe.dll",
+		),
+
+		Kanji2KoeDic: filepath.Join(
+			aqk2kRoot,
+			"aq_dic",
+		),
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	defer aq.Close()
 
 	if err := e.RegisterTTS(aq); err != nil {
 		log.Fatal(err)

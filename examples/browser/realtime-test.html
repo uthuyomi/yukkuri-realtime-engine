@@ -1,81 +1,409 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
     <meta charset="UTF-8">
     <title>Yukkuri Realtime Test</title>
 </head>
+
 <body>
     <h1>Yukkuri Realtime Test</h1>
 
+    <button id="start-audio">
+        Start Audio
+    </button>
+
+    <p>
+        Start Audioを押してからDevTools Consoleでテストしてください。
+    </p>
+
     <script>
-    const ws = new WebSocket(
-        "ws://127.0.0.1:8765/v1/realtime"
-    );
+        const ENGINE_SAMPLE_RATE = 8000;
 
-    ws.binaryType = "arraybuffer";
+        let audioContext = null;
+        let playerNode = null;
 
-    const audioChunks = [];
+        let currentGenerationID = null;
+        let currentSpeechSequence = null;
 
-    ws.onopen = () => {
-        console.log("CONNECTED");
-    };
+        let inputSampleRate = ENGINE_SAMPLE_RATE;
+        let inputChannels = 1;
+        let inputBits = 16;
 
-    ws.onmessage = (event) => {
-        if (typeof event.data === "string") {
-            const message = JSON.parse(event.data);
+        const ws = new WebSocket(
+            "ws://127.0.0.1:8765/v1/realtime"
+        );
 
-            console.log("EVENT:", message);
+        ws.binaryType = "arraybuffer";
 
-            if (message.type === "response.audio.started") {
-                audioChunks.length = 0;
+        ws.onopen = () => {
+            console.log("CONNECTED");
+        };
+
+        ws.onerror = (event) => {
+            console.error(
+                "WS ERROR:",
+                event
+            );
+        };
+
+        ws.onclose = (event) => {
+            console.log(
+                "CLOSED:",
+                event.code,
+                event.reason
+            );
+        };
+
+        ws.onmessage = (event) => {
+            if (typeof event.data === "string") {
+                handleEvent(
+                    JSON.parse(event.data)
+                );
+
+                return;
             }
 
-            if (message.type === "response.audio.done") {
-                const blob = new Blob(
-                    audioChunks,
+            if (event.data instanceof ArrayBuffer) {
+                handleAudioBinary(event.data);
+            }
+        };
+
+        document
+            .getElementById("start-audio")
+            .addEventListener(
+                "click",
+                startAudio
+            );
+
+        async function startAudio() {
+            if (!audioContext) {
+                audioContext = new AudioContext();
+
+                await audioContext.audioWorklet.addModule(
+                    "./audio-worklet.js"
+                );
+
+                playerNode = new AudioWorkletNode(
+                    audioContext,
+                    "pcm-player",
                     {
-                        type: "audio/wav"
+                        numberOfInputs: 0,
+                        numberOfOutputs: 1,
+                        outputChannelCount: [1]
                     }
                 );
 
-                const url = URL.createObjectURL(blob);
+                playerNode.port.onmessage = (event) => {
+                    const message = event.data;
 
-                const audio = new Audio(url);
+                    if (
+                        message.type !==
+                        "playback.progress"
+                    ) {
+                        return;
+                    }
 
-                audio.play();
+                    if (
+                        !ws ||
+                        ws.readyState !== WebSocket.OPEN
+                    ) {
+                        return;
+                    }
 
-                audio.onended = () => {
-                    URL.revokeObjectURL(url);
+                    if (
+                        !message.generationId ||
+                        !message.sampleRate ||
+                        message.playedFrames == null
+                    ) {
+                        return;
+                    }
+
+                    const playedSeconds =
+                        message.playedFrames /
+                        message.sampleRate;
+
+                    const progressEvent = {
+                        type: "playback.progress",
+                        generation_id:
+                            message.generationId,
+                        data: {
+                            played_seconds:
+                                playedSeconds
+                        }
+                    };
+
+                    console.log(
+                        "PLAYBACK PROGRESS SEND:",
+                        progressEvent
+                    );
+
+                    ws.send(
+                        JSON.stringify(
+                            progressEvent
+                        )
+                    );
                 };
+
+                playerNode.connect(
+                    audioContext.destination
+                );
             }
 
-            return;
+            if (audioContext.state !== "running") {
+                await audioContext.resume();
+            }
+
+            console.log(
+                "AUDIO READY:",
+                audioContext.sampleRate
+            );
         }
 
-        if (event.data instanceof ArrayBuffer) {
+        function handleEvent(message) {
             console.log(
-                "AUDIO CHUNK:",
-                event.data.byteLength,
+                "EVENT:",
+                message
+            );
+
+            switch (message.type) {
+                case "generation.created":
+                    currentGenerationID =
+                        message.generation_id;
+
+                    if (playerNode) {
+                        playerNode.port.postMessage({
+                            type: "generation",
+                            generationId:
+                                currentGenerationID
+                        });
+                    }
+
+                    break;
+
+                case "response.audio.chunk.started":
+                    startAudioChunk(message);
+                    break;
+
+                case "response.audio.delta":
+                    break;
+
+                case "response.audio.chunk.done":
+                    finishAudioChunk(message);
+                    break;
+
+                case "generation.cancelled":
+                    stopPlayback();
+                    break;
+            }
+        }
+
+        function startAudioChunk(message) {
+            currentSpeechSequence =
+                message.data.sequence;
+
+            inputSampleRate =
+                message.data.sample_rate;
+
+            inputChannels =
+                message.data.channels;
+
+            inputBits =
+                message.data.bits_per_sample;
+
+            console.log(
+                "PCM CHUNK START:",
+                currentSpeechSequence,
+                inputSampleRate,
+                inputChannels,
+                inputBits,
+                message.data.text
+            );
+        }
+
+        function handleAudioBinary(buffer) {
+            if (!playerNode || !audioContext) {
+                console.warn(
+                    "Audio received before Start Audio"
+                );
+
+                return;
+            }
+
+            if (currentSpeechSequence === null) {
+                console.warn(
+                    "PCM received without active speech chunk"
+                );
+
+                return;
+            }
+
+            if (inputBits !== 16) {
+                console.error(
+                    "Unsupported PCM bit depth:",
+                    inputBits
+                );
+
+                return;
+            }
+
+            if (inputChannels !== 1) {
+                console.error(
+                    "Unsupported PCM channel count:",
+                    inputChannels
+                );
+
+                return;
+            }
+
+            const pcm16 =
+                new Int16Array(buffer);
+
+            let samples =
+                int16ToFloat32(pcm16);
+
+            if (
+                inputSampleRate !==
+                audioContext.sampleRate
+            ) {
+                samples = resampleLinear(
+                    samples,
+                    inputSampleRate,
+                    audioContext.sampleRate
+                );
+            }
+
+            playerNode.port.postMessage(
+                {
+                    type: "audio",
+                    generationId:
+                        currentGenerationID,
+                    samples
+                },
+                [samples.buffer]
+            );
+
+            console.log(
+                "PCM:",
+                currentSpeechSequence,
+                buffer.byteLength,
+                "bytes"
+            );
+        }
+
+        function finishAudioChunk(message) {
+            console.log(
+                "PCM CHUNK DONE:",
+                message.data.sequence,
+                message.data.bytes,
                 "bytes"
             );
 
-            audioChunks.push(event.data);
+            currentSpeechSequence = null;
         }
-    };
 
-    ws.onerror = (event) => {
-        console.error("WS ERROR:", event);
-    };
+        function int16ToFloat32(input) {
+            const output =
+                new Float32Array(input.length);
 
-    ws.onclose = (event) => {
-        console.log(
-            "CLOSED:",
-            event.code,
-            event.reason
-        );
-    };
+            for (
+                let i = 0;
+                i < input.length;
+                i++
+            ) {
+                const value = input[i];
 
-    window.ws = ws;
-</script>
+                output[i] =
+                    value < 0
+                        ? value / 32768
+                        : value / 32767;
+            }
+
+            return output;
+        }
+
+        function resampleLinear(
+            input,
+            sourceRate,
+            targetRate
+        ) {
+            if (sourceRate === targetRate) {
+                return input;
+            }
+
+            const ratio =
+                sourceRate / targetRate;
+
+            const outputLength =
+                Math.max(
+                    1,
+                    Math.round(
+                        input.length / ratio
+                    )
+                );
+
+            const output =
+                new Float32Array(
+                    outputLength
+                );
+
+            for (
+                let i = 0;
+                i < outputLength;
+                i++
+            ) {
+                const sourcePosition =
+                    i * ratio;
+
+                const index =
+                    Math.floor(
+                        sourcePosition
+                    );
+
+                const nextIndex =
+                    Math.min(
+                        index + 1,
+                        input.length - 1
+                    );
+
+                const fraction =
+                    sourcePosition - index;
+
+                output[i] =
+                    input[index] *
+                    (1 - fraction) +
+                    input[nextIndex] *
+                    fraction;
+            }
+
+            return output;
+        }
+
+        function stopPlayback() {
+            const cancelledGeneration =
+                currentGenerationID;
+
+            if (playerNode) {
+                playerNode.port.postMessage({
+                    type: "clear",
+                    generationId:
+                        cancelledGeneration
+                });
+            }
+
+            currentGenerationID = null;
+            currentSpeechSequence = null;
+
+            console.log(
+                "PLAYBACK CANCELLED:",
+                cancelledGeneration
+            );
+        }
+
+        window.ws = ws;
+        window.stopPlayback = stopPlayback;
+        window.startAudio = startAudio;
+    </script>
 </body>
+
 </html>

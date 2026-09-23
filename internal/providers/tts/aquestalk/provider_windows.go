@@ -29,11 +29,16 @@ type Config struct {
 
 	DevKey string
 	UsrKey string
+
+	Kanji2KoeDLL    string
+	Kanji2KoeDic    string
+	Kanji2KoeDevKey string
 }
 
 type Provider struct {
 	voices       map[string]*voice
 	defaultVoice string
+	kanji2Koe    *kanji2Koe
 }
 
 type voice struct {
@@ -105,6 +110,31 @@ func New(config Config) (*Provider, error) {
 	}
 
 	p.defaultVoice = defaultVoice
+
+	if config.Kanji2KoeDLL != "" || config.Kanji2KoeDic != "" {
+		if config.Kanji2KoeDLL == "" {
+			return nil, fmt.Errorf(
+				"AqKanji2Koe DLL path is required",
+			)
+		}
+
+		if config.Kanji2KoeDic == "" {
+			return nil, fmt.Errorf(
+				"AqKanji2Koe dictionary path is required",
+			)
+		}
+
+		k, err := newKanji2Koe(
+			config.Kanji2KoeDLL,
+			config.Kanji2KoeDic,
+			config.Kanji2KoeDevKey,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		p.kanji2Koe = k
+	}
 
 	return p, nil
 }
@@ -240,7 +270,21 @@ func (p *Provider) Synthesize(
 		)
 	}
 
-	koe, err := syscall.BytePtrFromString(req.Text)
+	speechText := req.Text
+
+	if p.kanji2Koe != nil {
+		converted, err := p.kanji2Koe.Convert(req.Text)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"failed to convert Japanese text to AquesTalk symbols: %w",
+				err,
+			)
+		}
+
+		speechText = converted
+	}
+
+	koe, err := syscall.BytePtrFromString(speechText)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"failed to encode AquesTalk input: %w",
@@ -293,6 +337,16 @@ func (p *Provider) Synthesize(
 		},
 		Audio: io.NopCloser(bytes.NewReader(data)),
 	}, nil
+}
+
+func (p *Provider) Close() {
+	if p == nil {
+		return
+	}
+
+	if p.kanji2Koe != nil {
+		p.kanji2Koe.Close()
+	}
 }
 
 func setKey(proc *syscall.LazyProc, key string) error {

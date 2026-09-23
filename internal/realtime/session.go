@@ -6,6 +6,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sync"
+
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/audio"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/speech"
 )
 
 type Session struct {
@@ -19,6 +22,8 @@ type Session struct {
 	generationID     string
 	generationCtx    context.Context
 	generationCancel context.CancelFunc
+	pipeline         *speech.Pipeline
+	timeline         *audio.PlaybackTimeline
 }
 
 func NewSession(parent context.Context) *Session {
@@ -42,6 +47,7 @@ func (s *Session) Context() context.Context {
 func (s *Session) StartGeneration() (
 	string,
 	context.Context,
+	*speech.Pipeline,
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -50,15 +56,35 @@ func (s *Session) StartGeneration() (
 		s.generationCancel()
 	}
 
+	if s.pipeline != nil {
+		s.pipeline.Cancel()
+	}
+
 	generationID := newID("gen")
 
-	ctx, cancel := context.WithCancel(s.ctx)
+	ctx, cancel :=
+		context.WithCancel(s.ctx)
+
+	pipeline := speech.NewPipeline(
+		ctx,
+		speech.ChunkerConfig{
+			SoftLimit: 30,
+			HardLimit: 60,
+		},
+	)
+
+	timeline :=
+		audio.NewPlaybackTimeline(
+			generationID,
+		)
 
 	s.generationID = generationID
 	s.generationCtx = ctx
 	s.generationCancel = cancel
+	s.pipeline = pipeline
+	s.timeline = timeline
 
-	return generationID, ctx
+	return generationID, ctx, pipeline
 }
 
 func (s *Session) CancelGeneration() string {
@@ -71,9 +97,20 @@ func (s *Session) CancelGeneration() string {
 		s.generationCancel()
 	}
 
+	if s.pipeline != nil {
+		s.pipeline.Cancel()
+	}
+
 	s.generationID = ""
 	s.generationCtx = nil
 	s.generationCancel = nil
+	s.pipeline = nil
+
+	// timeline intentionally remains available.
+	//
+	// Cancellation ends generation, but the final
+	// playback state is still useful for logging,
+	// interruption handling and observability.
 
 	return id
 }
@@ -83,6 +120,20 @@ func (s *Session) CurrentGeneration() string {
 	defer s.mu.Unlock()
 
 	return s.generationID
+}
+
+func (s *Session) Pipeline() *speech.Pipeline {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.pipeline
+}
+
+func (s *Session) Timeline() *audio.PlaybackTimeline {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.timeline
 }
 
 func (s *Session) Close() {
@@ -100,5 +151,7 @@ func newID(prefix string) string {
 		))
 	}
 
-	return prefix + "_" + hex.EncodeToString(buffer[:])
+	return prefix +
+		"_" +
+		hex.EncodeToString(buffer[:])
 }

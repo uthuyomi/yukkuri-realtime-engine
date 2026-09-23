@@ -15,9 +15,12 @@ type Event struct {
 }
 
 type GenerationCreateData struct {
-	Text  string  `json:"text"`
 	Voice string  `json:"voice,omitempty"`
 	Speed float64 `json:"speed,omitempty"`
+}
+
+type TextDeltaData struct {
+	Text string `json:"text"`
 }
 
 func NewEvent(
@@ -45,4 +48,8 @@ func NewEvent(
 		Timestamp:  time.Now().UTC(),
 		Data:       raw,
 	}, nil
+}
+
+type PlaybackProgressData struct {
+	PlayedSeconds float64 `json:"played_seconds"`
 }
