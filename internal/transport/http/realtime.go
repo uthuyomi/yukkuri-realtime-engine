@@ -11,12 +11,45 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/audio"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/stt"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/tts"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/realtime"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/speech"
 )
 
 const realtimeAudioChunkSize = 16 * 1024
+
+func (s *Server) handleInputAudioBinary(
+	session *realtime.Session,
+	writer *realtimeWriter,
+	payload []byte,
+) error {
+	if len(payload) == 0 {
+		return nil
+	}
+
+	if !session.AppendInputAudio(
+		payload,
+	) {
+		return sendRealtimeError(
+			session.Context(),
+			writer,
+			session.ID(),
+			"",
+			"input_audio_not_started",
+			"binary audio received before input_audio.start",
+		)
+	}
+
+	log.Printf(
+		"input audio chunk: session=%s bytes=%d",
+		session.ID(),
+		len(payload),
+	)
+
+	return nil
+}
 
 func (s *Server) handleRealtime(
 	w http.ResponseWriter,
@@ -68,7 +101,8 @@ func (s *Server) handleRealtime(
 	}
 
 	for {
-		_, payload, err := conn.Read(session.Context())
+		messageType, payload, err :=
+			conn.Read(session.Context())
 		if err != nil {
 			var closeErr websocket.CloseError
 
@@ -87,6 +121,22 @@ func (s *Server) handleRealtime(
 			}
 
 			return
+		}
+
+		if messageType == websocket.MessageBinary {
+			if err := s.handleInputAudioBinary(
+				session,
+				writer,
+				payload,
+			); err != nil {
+				log.Printf(
+					"input audio failed: session=%s: %v",
+					session.ID(),
+					err,
+				)
+			}
+
+			continue
 		}
 
 		var event realtime.Event
@@ -188,6 +238,117 @@ func (s *Server) processRealtimeEvent(
 			event,
 		)
 
+	case "input_audio.start":
+		var data realtime.InputAudioFormatData
+
+		if err := json.Unmarshal(
+			event.Data,
+			&data,
+		); err != nil {
+			return sendRealtimeError(
+				session.Context(),
+				writer,
+				session.ID(),
+				"",
+				"invalid_input_audio",
+				"invalid input_audio.start data",
+			)
+		}
+
+		if data.SampleRate <= 0 {
+			return sendRealtimeError(
+				session.Context(),
+				writer,
+				session.ID(),
+				"",
+				"invalid_input_audio",
+				"invalid input sample rate",
+			)
+		}
+
+		if data.Channels != 1 {
+			return sendRealtimeError(
+				session.Context(),
+				writer,
+				session.ID(),
+				"",
+				"invalid_input_audio",
+				"only mono input is currently supported",
+			)
+		}
+
+		if data.Encoding != "pcm_s16le" {
+			return sendRealtimeError(
+				session.Context(),
+				writer,
+				session.ID(),
+				"",
+				"invalid_input_audio",
+				"unsupported input audio encoding",
+			)
+		}
+
+		session.StartInputAudio(
+			data,
+		)
+
+		return nil
+
+	case "input_audio.commit":
+		audioData, format, ok :=
+			session.CommitInputAudio()
+
+		if !ok {
+			return sendRealtimeError(
+				session.Context(),
+				writer,
+				session.ID(),
+				"",
+				"input_audio_not_started",
+				"input_audio.commit received before input_audio.start",
+			)
+		}
+
+		if len(audioData) == 0 {
+			return sendRealtimeError(
+				session.Context(),
+				writer,
+				session.ID(),
+				"",
+				"empty_input_audio",
+				"input audio buffer is empty",
+			)
+		}
+
+		log.Printf(
+			"input audio committed: session=%s sample_rate=%d channels=%d encoding=%s bytes=%d",
+			session.ID(),
+			format.SampleRate,
+			format.Channels,
+			format.Encoding,
+			len(audioData),
+		)
+
+		if s.sttProvider == nil {
+			return sendRealtimeError(
+				session.Context(),
+				writer,
+				session.ID(),
+				"",
+				"stt_not_configured",
+				"STT provider is not configured",
+			)
+		}
+
+		go s.transcribeInputAudio(
+			session,
+			writer,
+			audioData,
+			format,
+		)
+
+		return nil
+
 	default:
 		return sendRealtimeError(
 			session.Context(),
@@ -198,6 +359,113 @@ func (s *Server) processRealtimeEvent(
 			"unknown realtime event type: "+event.Type,
 		)
 	}
+}
+
+func (s *Server) transcribeInputAudio(
+	session *realtime.Session,
+	writer *realtimeWriter,
+	audioData []byte,
+	format realtime.InputAudioFormatData,
+) {
+	ctx := session.Context()
+
+	result, err := s.sttProvider.Transcribe(
+		ctx,
+		stt.Request{
+			Audio: audioData,
+			Format: stt.AudioFormat{
+				SampleRate: format.SampleRate,
+				Channels:   format.Channels,
+				Encoding:   format.Encoding,
+			},
+		},
+	)
+	if err != nil {
+		if errors.Is(
+			err,
+			context.Canceled,
+		) {
+			return
+		}
+
+		log.Printf(
+			"STT failed: session=%s: %v",
+			session.ID(),
+			err,
+		)
+
+		_ = sendRealtimeError(
+			session.Context(),
+			writer,
+			session.ID(),
+			"",
+			"stt_failed",
+			err.Error(),
+		)
+
+		return
+	}
+
+	if result == nil {
+		_ = sendRealtimeError(
+			session.Context(),
+			writer,
+			session.ID(),
+			"",
+			"stt_failed",
+			"STT provider returned no result",
+		)
+
+		return
+	}
+
+	log.Printf(
+		"STT transcript: session=%s language=%s text=%q",
+		session.ID(),
+		result.Language,
+		result.Text,
+	)
+
+	response, err := realtime.NewEvent(
+		"input_audio.transcript.final",
+		session.ID(),
+		"",
+		map[string]any{
+			"text":     result.Text,
+			"language": result.Language,
+		},
+	)
+	if err != nil {
+		log.Printf(
+			"create STT transcript event failed: %v",
+			err,
+		)
+
+		return
+	}
+
+	if err := writer.Event(
+		session.Context(),
+		response,
+	); err != nil {
+		log.Printf(
+			"send STT transcript failed: session=%s: %v",
+			session.ID(),
+			err,
+		)
+
+		return
+	}
+
+	if result.Text == "" {
+		return
+	}
+
+	s.startLLMGeneration(
+		session,
+		writer,
+		result.Text,
+	)
 }
 
 func (s *Server) handleGenerationCreate(
@@ -713,4 +981,206 @@ func sendRealtimeError(
 	}
 
 	return writer.Event(ctx, event)
+}
+
+func (s *Server) startLLMGeneration(
+	session *realtime.Session,
+	writer *realtimeWriter,
+	userText string,
+) {
+	if s.llmProvider == nil {
+		_ = sendRealtimeError(
+			session.Context(),
+			writer,
+			session.ID(),
+			"",
+			"llm_not_configured",
+			"LLM provider is not configured",
+		)
+
+		return
+	}
+
+	generationID, generationCtx, pipeline :=
+		session.StartGeneration()
+
+	created, err := realtime.NewEvent(
+		"generation.created",
+		session.ID(),
+		generationID,
+		map[string]any{
+			"source":   "voice",
+			"provider": s.llmProvider.Name(),
+		},
+	)
+	if err != nil {
+		return
+	}
+
+	if err := writer.Event(
+		generationCtx,
+		created,
+	); err != nil {
+		return
+	}
+
+	go s.runSpeechPipeline(
+		session,
+		writer,
+		generationCtx,
+		generationID,
+		pipeline,
+		"",
+		0,
+	)
+
+	go s.runLLMGeneration(
+		session,
+		writer,
+		generationCtx,
+		generationID,
+		pipeline,
+		userText,
+	)
+}
+
+func (s *Server) runLLMGeneration(
+	session *realtime.Session,
+	writer *realtimeWriter,
+	ctx context.Context,
+	generationID string,
+	pipeline *speech.Pipeline,
+	userText string,
+) {
+	log.Printf(
+		"LLM generation started: generation=%s text=%q",
+		generationID,
+		userText,
+	)
+
+	stream, err := s.llmProvider.Generate(
+		ctx,
+		llm.Request{
+			Messages: []llm.Message{
+				{
+					Role:    "user",
+					Content: userText,
+				},
+			},
+		},
+	)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+
+		_ = sendRealtimeError(
+			session.Context(),
+			writer,
+			session.ID(),
+			generationID,
+			"llm_failed",
+			err.Error(),
+		)
+
+		return
+	}
+
+	defer stream.Close()
+
+	for {
+		delta, err := stream.Recv()
+
+		if errors.Is(err, io.EOF) {
+			if err := pipeline.Close(); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					log.Printf(
+						"close speech pipeline failed: generation=%s: %v",
+						generationID,
+						err,
+					)
+				}
+			}
+
+			done, eventErr := realtime.NewEvent(
+				"response.text.done",
+				session.ID(),
+				generationID,
+				nil,
+			)
+
+			if eventErr == nil {
+				_ = writer.Event(
+					ctx,
+					done,
+				)
+			}
+
+			log.Printf(
+				"LLM generation completed: generation=%s",
+				generationID,
+			)
+
+			return
+		}
+
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+
+			_ = sendRealtimeError(
+				session.Context(),
+				writer,
+				session.ID(),
+				generationID,
+				"llm_stream_failed",
+				err.Error(),
+			)
+
+			return
+		}
+
+		if delta.Text == "" {
+			continue
+		}
+
+		event, eventErr := realtime.NewEvent(
+			"response.text.delta",
+			session.ID(),
+			generationID,
+			realtime.TextDeltaData{
+				Text: delta.Text,
+			},
+		)
+		if eventErr != nil {
+			return
+		}
+
+		if err := writer.Event(
+			ctx,
+			event,
+		); err != nil {
+			return
+		}
+
+		if err := pipeline.Push(
+			delta.Text,
+		); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+
+			_ = sendRealtimeError(
+				session.Context(),
+				writer,
+				session.ID(),
+				generationID,
+				"speech_pipeline_failed",
+				err.Error(),
+			)
+
+			return
+		}
+	}
 }

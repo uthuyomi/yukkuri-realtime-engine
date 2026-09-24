@@ -13,6 +13,14 @@
         Start Audio
     </button>
 
+    <button id="start-microphone">
+        Start Microphone
+    </button>
+
+    <span id="vad-status">
+        VAD: stopped
+    </span>
+
     <p>
         Start Audioを押してからDevTools Consoleでテストしてください。
     </p>
@@ -22,6 +30,10 @@
 
         let audioContext = null;
         let playerNode = null;
+
+        let microphoneVAD = null;
+        let microphoneStarted = false;
+        let userSpeaking = false;
 
         let currentGenerationID = null;
         let currentSpeechSequence = null;
@@ -74,6 +86,13 @@
             .addEventListener(
                 "click",
                 startAudio
+            );
+
+        document
+            .getElementById("start-microphone")
+            .addEventListener(
+                "click",
+                startMicrophone
             );
 
         async function startAudio() {
@@ -158,6 +177,278 @@
                 "AUDIO READY:",
                 audioContext.sampleRate
             );
+        }
+
+        async function startMicrophone() {
+            if (microphoneStarted) {
+                console.log("MICROPHONE ALREADY STARTED");
+                return;
+            }
+
+            await startAudio();
+
+            console.log("INITIALIZING SILERO VAD");
+
+            microphoneVAD = await vad.MicVAD.new({
+                onnxWASMBasePath:
+                    "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/",
+
+                baseAssetPath:
+                    "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/",
+
+                onSpeechStart: () => {
+                    console.log(
+                        "SILERO CALLBACK: onSpeechStart"
+                    );
+
+                    handleUserSpeechStart();
+                },
+
+                onSpeechEnd: (audio) => {
+                    console.log(
+                        "SILERO CALLBACK: onSpeechEnd",
+                        audio?.length
+                    );
+
+                    handleUserSpeechEnd(audio);
+                },
+
+                onVADMisfire: () => {
+                    console.log(
+                        "SILERO CALLBACK: onVADMisfire"
+                    );
+
+                    handleVADMisfire();
+                }
+            });
+
+            await microphoneVAD.start();
+
+            microphoneStarted = true;
+
+            setVADStatus("listening");
+
+            console.log("MICROPHONE + SILERO VAD READY");
+        }
+
+        function handleUserSpeechStart() {
+            if (userSpeaking) {
+                return;
+            }
+
+            userSpeaking = true;
+
+            setVADStatus("speech");
+
+            console.log(
+                "USER SPEECH STARTED",
+                {
+                    generation:
+                        currentGenerationID
+                }
+            );
+
+            if (!currentGenerationID) {
+                return;
+            }
+
+            requestBargeIn(
+                currentGenerationID
+            );
+        }
+
+        function handleUserSpeechEnd(audio) {
+            userSpeaking = false;
+
+            setVADStatus("listening");
+
+            if (
+                !audio ||
+                audio.length === 0
+            ) {
+                return;
+            }
+
+            console.log(
+                "USER SPEECH ENDED",
+                {
+                    samples: audio.length
+                }
+            );
+
+            sendUserSpeech(audio);
+        }
+
+        function sendUserSpeech(audio) {
+            if (
+                !ws ||
+                ws.readyState !== WebSocket.OPEN
+            ) {
+                return;
+            }
+
+            const pcm16 =
+                float32ToPCM16(audio);
+
+            const sampleRate = 16000;
+
+            ws.send(
+                JSON.stringify({
+                    type: "input_audio.start",
+                    data: {
+                        sample_rate: sampleRate,
+                        channels: 1,
+                        encoding: "pcm_s16le"
+                    }
+                })
+            );
+
+            /*
+             * Keep every WebSocket binary message
+             * comfortably below the server read limit.
+             *
+             * 16 KiB = 8192 PCM16 mono samples
+             *        = about 512 ms at 16 kHz.
+             */
+            const chunkSize = 16 * 1024;
+
+            const bytes =
+                new Uint8Array(
+                    pcm16.buffer,
+                    pcm16.byteOffset,
+                    pcm16.byteLength
+                );
+
+            for (
+                let offset = 0;
+                offset < bytes.length;
+                offset += chunkSize
+            ) {
+                const end =
+                    Math.min(
+                        offset + chunkSize,
+                        bytes.length
+                    );
+
+                const chunk =
+                    bytes.slice(
+                        offset,
+                        end
+                    );
+
+                ws.send(
+                    chunk.buffer
+                );
+            }
+
+            ws.send(
+                JSON.stringify({
+                    type: "input_audio.commit"
+                })
+            );
+
+            console.log(
+                "INPUT AUDIO STREAMED:",
+                pcm16.byteLength,
+                "bytes"
+            );
+        }
+
+        function float32ToPCM16(input) {
+            const output =
+                new Int16Array(
+                    input.length
+                );
+
+            for (
+                let i = 0;
+                i < input.length;
+                i++
+            ) {
+                const sample =
+                    Math.max(
+                        -1,
+                        Math.min(
+                            1,
+                            input[i]
+                        )
+                    );
+
+                output[i] =
+                    sample < 0
+                        ? sample * 32768
+                        : sample * 32767;
+            }
+
+            return output;
+        }
+
+        function handleVADMisfire() {
+            userSpeaking = false;
+
+            setVADStatus("listening");
+
+            console.log(
+                "VAD MISFIRE"
+            );
+        }
+
+        function requestBargeIn(
+            generationID
+        ) {
+            if (
+                !generationID ||
+                !ws ||
+                ws.readyState !== WebSocket.OPEN
+            ) {
+                return;
+            }
+
+            console.log(
+                "BARGE-IN:",
+                generationID
+            );
+
+            /*
+             * Stop local playback immediately.
+             *
+             * Do not wait for the server round trip.
+             * This is important for interruption latency.
+             */
+            if (playerNode) {
+                playerNode.port.postMessage({
+                    type: "clear",
+                    generationId:
+                        generationID
+                });
+            }
+
+            /*
+             * Cancel server-side generation.
+             */
+            ws.send(
+                JSON.stringify({
+                    type: "generation.cancel",
+                    generation_id:
+                        generationID
+                })
+            );
+        }
+
+        function setVADStatus(
+            status
+        ) {
+            const element =
+                document.getElementById(
+                    "vad-status"
+                );
+
+            if (!element) {
+                return;
+            }
+
+            element.textContent =
+                "VAD: " + status;
         }
 
         function handleEvent(message) {
@@ -404,6 +695,8 @@
         window.stopPlayback = stopPlayback;
         window.startAudio = startAudio;
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"></script>
 </body>
 
 </html>

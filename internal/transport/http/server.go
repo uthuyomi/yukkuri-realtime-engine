@@ -11,12 +11,16 @@ import (
 	"time"
 
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/engine"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/stt"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/tts"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm"
 )
 
 type Server struct {
-	engine *engine.Engine
-	server *http.Server
+	engine      *engine.Engine
+	sttProvider stt.Provider
+	llmProvider llm.Provider
+	server      *http.Server
 }
 
 type Config struct {
@@ -41,6 +45,18 @@ func New(config Config, e *engine.Engine) *Server {
 	}
 
 	return s
+}
+
+func (s *Server) SetSTTProvider(
+	provider stt.Provider,
+) {
+	s.sttProvider = provider
+}
+
+func (s *Server) SetLLMProvider(
+	provider llm.Provider,
+) {
+	s.llmProvider = provider
 }
 
 func (s *Server) ListenAndServe() error {

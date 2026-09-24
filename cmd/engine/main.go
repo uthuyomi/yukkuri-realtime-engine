@@ -9,18 +9,31 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/engine"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm/openai"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/stt/whispercpp"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/tts/aquestalk"
 	httptransport "github.com/uthuyomi/yukkuri-realtime-engine/internal/transport/http"
 )
 
 func main() {
+
+	if err := godotenv.Load(); err != nil {
+		log.Printf(".env not loaded: %v", err)
+	}
+
 	log.Println("Yukkuri Realtime Engine starting...")
 
 	e := engine.New()
 
 	const aqRoot = `internal\providers\tts\aquestalk\aqtk1_win\lib64`
 	const aqk2kRoot = `internal\providers\tts\aquestalk\aqk2k_win`
+
+	// --------------------------------------------------
+	// TTS: AquesTalk
+	// --------------------------------------------------
 
 	aq, err := aquestalk.New(aquestalk.Config{
 		DefaultVoice: "f1",
@@ -63,12 +76,95 @@ func main() {
 		aq.VoiceNames(),
 	)
 
+	// --------------------------------------------------
+	// STT: whisper.cpp
+	// --------------------------------------------------
+
+	whisper, err := whispercpp.New(
+		whispercpp.Config{
+			Executable: filepath.Join(
+				"runtime",
+				"whisper",
+				"whisper-cli.exe",
+			),
+			Model: filepath.Join(
+				"runtime",
+				"whisper",
+				"models",
+				"ggml-small.bin",
+			),
+			Language: "ja",
+		},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf(
+		"STT provider loaded: %s",
+		whisper.Name(),
+	)
+
+	// --------------------------------------------------
+	// LLM: OpenAI
+	// --------------------------------------------------
+
+	openAIAPIKey := os.Getenv(
+		"OPENAI_API_KEY",
+	)
+
+	if openAIAPIKey == "" {
+		log.Fatal(
+			"OPENAI_API_KEY is required",
+		)
+	}
+
+	openAIModel := os.Getenv(
+		"OPENAI_MODEL",
+	)
+
+	if openAIModel == "" {
+		openAIModel = "gpt-5.6-luna"
+	}
+
+	openAIProvider, err := openai.New(
+		openai.Config{
+			APIKey: openAIAPIKey,
+			Model:  openAIModel,
+		},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf(
+		"LLM provider loaded: %s model=%s",
+		openAIProvider.Name(),
+		openAIModel,
+	)
+
+	// --------------------------------------------------
+	// HTTP / Realtime server
+	// --------------------------------------------------
+
 	server := httptransport.New(
 		httptransport.Config{
 			Address: "127.0.0.1:8765",
 		},
 		e,
 	)
+
+	server.SetSTTProvider(
+		whisper,
+	)
+
+	server.SetLLMProvider(
+		openAIProvider,
+	)
+
+	// --------------------------------------------------
+	// Start server
+	// --------------------------------------------------
 
 	errCh := make(chan error, 1)
 
@@ -88,10 +184,16 @@ func main() {
 
 	select {
 	case sig := <-signalCh:
-		log.Printf("received signal: %s", sig)
+		log.Printf(
+			"received signal: %s",
+			sig,
+		)
 
 	case err := <-errCh:
-		log.Fatalf("HTTP server failed: %v", err)
+		log.Fatalf(
+			"HTTP server failed: %v",
+			err,
+		)
 	}
 
 	ctx, cancel := context.WithTimeout(
@@ -101,8 +203,13 @@ func main() {
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("HTTP shutdown error: %v", err)
+		log.Printf(
+			"HTTP shutdown error: %v",
+			err,
+		)
 	}
 
-	log.Println("Yukkuri Realtime Engine stopped")
+	log.Println(
+		"Yukkuri Realtime Engine stopped",
+	)
 }

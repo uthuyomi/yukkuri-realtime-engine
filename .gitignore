@@ -1,5 +1,6 @@
 # AquesTalk proprietary binaries / SDK
 internal/providers/tts/aquestalk/aqtk1_win/
+internal/providers/tts/aquestalk/aqk2k_win/
 
 # Generated audio
 *.wav
@@ -18,3 +19,6 @@ internal/providers/tts/aquestalk/aqtk1_win/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local Whisper runtime / models
+runtime/whisper/

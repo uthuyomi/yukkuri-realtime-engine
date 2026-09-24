@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -24,6 +25,10 @@ type Session struct {
 	generationCancel context.CancelFunc
 	pipeline         *speech.Pipeline
 	timeline         *audio.PlaybackTimeline
+
+	inputAudioFormat InputAudioFormatData
+	inputAudioBuffer bytes.Buffer
+	inputAudioActive bool
 }
 
 func NewSession(parent context.Context) *Session {
@@ -134,6 +139,58 @@ func (s *Session) Timeline() *audio.PlaybackTimeline {
 	defer s.mu.Unlock()
 
 	return s.timeline
+}
+
+func (s *Session) StartInputAudio(
+	format InputAudioFormatData,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.inputAudioBuffer.Reset()
+	s.inputAudioFormat = format
+	s.inputAudioActive = true
+}
+
+func (s *Session) AppendInputAudio(
+	data []byte,
+) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.inputAudioActive {
+		return false
+	}
+
+	_, _ = s.inputAudioBuffer.Write(data)
+
+	return true
+}
+
+func (s *Session) CommitInputAudio() (
+	[]byte,
+	InputAudioFormatData,
+	bool,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.inputAudioActive {
+		return nil, InputAudioFormatData{}, false
+	}
+
+	audio := append(
+		[]byte(nil),
+		s.inputAudioBuffer.Bytes()...,
+	)
+
+	format := s.inputAudioFormat
+
+	s.inputAudioBuffer.Reset()
+	s.inputAudioFormat = InputAudioFormatData{}
+	s.inputAudioActive = false
+
+	return audio, format, true
 }
 
 func (s *Session) Close() {

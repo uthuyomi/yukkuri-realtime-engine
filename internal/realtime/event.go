@@ -53,3 +53,15 @@ func NewEvent(
 type PlaybackProgressData struct {
 	PlayedSeconds float64 `json:"played_seconds"`
 }
+
+type InputAudioCommitData struct {
+	SampleRate int `json:"sample_rate"`
+	Channels   int `json:"channels"`
+	Bytes      int `json:"bytes"`
+}
+
+type InputAudioFormatData struct {
+	SampleRate int    `json:"sample_rate"`
+	Channels   int    `json:"channels"`
+	Encoding   string `json:"encoding"`
+}
