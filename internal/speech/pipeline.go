@@ -11,8 +11,9 @@ var ErrPipelineClosed = errors.New(
 )
 
 type Chunk struct {
-	Sequence int
-	Text     string
+	Sequence   int
+	Text       string
+	SourceText string
 }
 
 type Pipeline struct {
@@ -126,7 +127,7 @@ func (p *Pipeline) emitChunks(
 			continue
 		}
 
-		if err := p.emit(normalized); err != nil {
+		if err := p.emit(normalized, text); err != nil {
 			return err
 		}
 	}
@@ -134,10 +135,11 @@ func (p *Pipeline) emitChunks(
 	return nil
 }
 
-func (p *Pipeline) emit(text string) error {
+func (p *Pipeline) emit(text, source string) error {
 	chunk := Chunk{
-		Sequence: p.sequence,
-		Text:     text,
+		Sequence:   p.sequence,
+		Text:       text,
+		SourceText: source,
 	}
 
 	select {

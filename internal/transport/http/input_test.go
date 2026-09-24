@@ -185,7 +185,7 @@ func TestRealtimeEndpointAndBargeIn(t *testing.T) {
 	}
 	select {
 	case req := <-lm.calls:
-		if len(req.Messages) != 1 || req.Messages[0].Content != "こんにちは" {
+		if len(req.Messages) != 2 || req.Messages[0].Role != "system" || req.Messages[1].Content != "こんにちは" {
 			t.Fatal("incorrect LLM input")
 		}
 	case <-ctx.Done():

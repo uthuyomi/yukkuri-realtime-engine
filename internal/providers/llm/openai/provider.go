@@ -91,9 +91,6 @@ func (p *Provider) Generate(
 			Model:  p.model,
 			Input:  messages,
 			Stream: true,
-			Instructions: "あなたは音声会話アシスタントです。" +
-				"自然な日本語で簡潔に応答してください。" +
-				"回答は音声合成されるため、Markdownを必要以上に使わないでください。",
 		},
 	)
 	if err != nil {

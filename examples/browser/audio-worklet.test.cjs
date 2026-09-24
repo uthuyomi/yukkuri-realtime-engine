@@ -68,3 +68,20 @@ test('clear after pause releases all retained samples', () => {
     assert.equal(p.queue.length, 0);
     assert.deepEqual(render(2), [0, 0]);
 });
+
+
+test('native source frames map partial playback conservatively and acknowledge exact packet completion', () => {
+    const {p, render, messages} = player();
+    p.setGeneration('g1');
+    // Simulate resampling: hardware sample count differs from source PCM frames.
+    p.enqueue('g1', new Float32Array([1, 2, 3, 4, 5]), 3);
+    render(2); p.pause('g1', 'p1');
+    assert.equal(messages.at(-1).playedSourceFrames, 1);
+    p.resume('g1', 'p1'); render(3);
+    assert.equal(messages.at(-1).type, 'playback.progress');
+    assert.equal(messages.at(-1).playedSourceFrames, 3);
+    p.enqueue('g1', new Float32Array([6]), 1); render(1);
+    assert.equal(messages.at(-1).playedSourceFrames, 4);
+    p.setGeneration('g2');
+    assert.equal(p.playedSourceFrames, 0);
+});

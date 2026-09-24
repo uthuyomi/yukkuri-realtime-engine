@@ -141,6 +141,7 @@
                     if (message.type === "playback.progress" || message.type === "playback.paused") {
                         ws.send(JSON.stringify({type: message.type, generation_id: message.generationId,
                             data: {played_seconds: message.playedFrames / message.sampleRate,
+                                played_source_frames: message.playedSourceFrames,
                                 interruption_id: message.interruptionId || ""}}));
                     }
                 };
@@ -315,7 +316,9 @@
         function handleEvent(message) {
             console.log(
                 "EVENT:",
-                message
+                {type: message.type, generation_id: message.generation_id,
+                    event_id: message.event_id, status: message.data?.status,
+                    state: message.data?.state}
             );
 
             switch (message.type) {
@@ -401,8 +404,7 @@
                 currentSpeechSequence,
                 inputSampleRate,
                 inputChannels,
-                inputBits,
-                message.data.text
+                inputBits
             );
         }
 
@@ -428,7 +430,7 @@
                 return;
             }
             postedOutputFrames += samples.length;
-            playerNode.port.postMessage({type: "audio", generationId: audio.generationId, samples}, [samples.buffer]);
+            playerNode.port.postMessage({type: "audio", generationId: audio.generationId, samples, sourceFrames: pcm16.length}, [samples.buffer]);
         }
 
         function finishAudioChunk(message) {

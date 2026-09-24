@@ -11,11 +11,13 @@ import (
 // Only a Session-issued Promotion has crossed both endpoint and interruption
 // barriers. This is the first point where speculative content can reach a writer.
 func (s *Server) runPromotedInput(session *realtime.Session, writer *realtimeWriter, p *realtime.Promotion) {
-	defer p.Stream.Close()
+	if p.Stream != nil {
+		defer p.Stream.Close()
+	}
 	if p.Context.Err() != nil {
 		return
 	}
-	transcript, err := realtime.NewEvent("input_audio.transcript.final", session.ID(), "", map[string]string{"text": p.Transcript.Text, "language": p.Transcript.Language})
+	transcript, err := realtime.NewEvent("input_audio.transcript.final", session.ID(), "", map[string]string{"text": p.Transcript.Text, "language": p.Transcript.Language, "turn_id": p.Key.TurnID})
 	if err != nil || writer.Event(p.Context, transcript) != nil {
 		if p.GenerationID != "" {
 			s.cancelFailedGeneration(session, writer, p.GenerationID)
@@ -31,6 +33,10 @@ func (s *Server) runPromotedInput(session *realtime.Session, writer *realtimeWri
 		return
 	}
 	go s.runSpeechPipeline(session, writer, p.Context, p.GenerationID, p.Pipeline, "", 0)
+	if p.Stream == nil {
+		s.runLLMGeneration(session, writer, p.Context, p.GenerationID, p.Pipeline)
+		return
+	}
 	s.consumeLLMStream(session, writer, p.Context, p.GenerationID, p.Pipeline, &promotedStream{server: s, session: session, writer: writer, promotion: p, stream: p.Stream})
 }
 
@@ -55,7 +61,11 @@ func (r *promotedStream) Recv() (llm.Delta, error) {
 		if eventErr == nil {
 			_ = r.writer.Event(r.promotion.Context, event)
 		}
-		stream, generateErr := r.server.llmProvider.Generate(r.promotion.Context, llm.Request{Messages: []llm.Message{{Role: "user", Content: r.promotion.Transcript.Text}}})
+		request, ok := r.session.GenerationRequest(r.promotion.GenerationID)
+		if !ok {
+			return llm.Delta{}, r.promotion.Context.Err()
+		}
+		stream, generateErr := r.server.llmProvider.Generate(r.promotion.Context, request)
 		if generateErr != nil {
 			return llm.Delta{}, generateErr
 		}

@@ -1,5 +1,8 @@
 # Backchannel Detection / False-interruption Recovery
 
+後続工程の履歴確定・再生範囲の扱いは [Conversation Runtime](conversation-runtime.md) を参照。
+以下は Interruption 工程時点の実装報告。
+
 2026-09-24 実装報告。Smart Turn v3.2と既存の入力ターンRuntimeを維持し、その前段に、
 出力の一時停止と割り込み確定を分ける処理を追加した。
 

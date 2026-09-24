@@ -15,8 +15,9 @@ type Event struct {
 }
 
 type GenerationCreateData struct {
-	Voice string  `json:"voice,omitempty"`
-	Speed float64 `json:"speed,omitempty"`
+	Voice  string  `json:"voice,omitempty"`
+	Speed  float64 `json:"speed,omitempty"`
+	Output string  `json:"output,omitempty"`
 }
 
 type TextDeltaData struct {
@@ -51,12 +52,14 @@ func NewEvent(
 }
 
 type PlaybackProgressData struct {
-	PlayedSeconds float64 `json:"played_seconds"`
+	PlayedSeconds      float64 `json:"played_seconds"`
+	PlayedSourceFrames *int64  `json:"played_source_frames,omitempty"`
 }
 
 type InterruptionRequestData struct {
-	InterruptionID string  `json:"interruption_id"`
-	PlayedSeconds  float64 `json:"played_seconds,omitempty"`
+	InterruptionID     string  `json:"interruption_id"`
+	PlayedSeconds      float64 `json:"played_seconds,omitempty"`
+	PlayedSourceFrames *int64  `json:"played_source_frames,omitempty"`
 }
 
 type InputAudioCommitData struct {

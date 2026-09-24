@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -92,6 +94,7 @@ type speculativeWork struct {
 	bytes                   int
 	terminal                error
 	generation              string
+	request                 llm.Request
 }
 
 func (s *Session) ConfigureSpeculation(p *limited.Provider, l llm.Provider, c SpeculationConfig) error {
@@ -238,7 +241,8 @@ func (s *Session) runSpeculation(w *speculativeWork, pcm []byte) {
 	copyResult := *result
 	w.result = &copyResult
 	s.speculationEventLocked(w, "ready", "stt", "")
-	if result.Text == "" {
+	if strings.TrimSpace(result.Text) == "" {
+		w.result.Text = ""
 		w.ready = true
 		w.terminal = io.EOF
 		if !w.committed {
@@ -248,9 +252,16 @@ func (s *Session) runSpeculation(w *speculativeWork, pcm []byte) {
 		s.mu.Unlock()
 		return
 	}
+	w.request, err = s.conversation.Context(result.Text)
+	if err != nil {
+		s.endSpeculationLocked(w, SpeculationCancelled, "fallback", "context_limit")
+		s.mu.Unlock()
+		return
+	}
+	request := llm.Request{Messages: append([]llm.Message(nil), w.request.Messages...)}
 	s.mu.Unlock()
 	llmStart := time.Now()
-	stream, err := r.llm.Generate(w.ctx, llm.Request{Messages: []llm.Message{{Role: "user", Content: result.Text}}})
+	stream, err := r.llm.Generate(w.ctx, request)
 	if stream != nil {
 		defer stream.Close()
 	}
@@ -346,7 +357,7 @@ type Promotion struct {
 func (s *Session) PromoteSpeculation(ctx context.Context, key SpeculationKey) *Promotion {
 	for {
 		s.mu.Lock()
-		if s.speculation == nil || ctx.Err() != nil {
+		if s.speculation == nil || ctx == nil || ctx.Err() != nil || ctx != s.responseContext || s.responseUsed {
 			s.mu.Unlock()
 			return nil
 		}
@@ -384,8 +395,16 @@ func (s *Session) PromoteSpeculation(ctx context.Context, key SpeculationKey) *P
 		var id string
 		gctx := ctx
 		var pipeline *speech.Pipeline
+		var err error
 		if w.result.Text != "" {
-			id, gctx, pipeline = s.startGenerationLocked()
+			id, gctx, pipeline, err = s.beginConversationResponseLocked(ctx, w.result.Text, false)
+			if err != nil {
+				s.endSpeculationLocked(w, SpeculationCancelled, "fallback", "conversation_rejected")
+				s.mu.Unlock()
+				return nil
+			}
+		} else {
+			s.responseUsed = true
 		}
 		w.state = SpeculationPromoted
 		w.generation = id
@@ -393,6 +412,15 @@ func (s *Session) PromoteSpeculation(ctx context.Context, key SpeculationKey) *P
 		context.AfterFunc(gctx, w.cancel)
 		s.speculationEventLocked(w, "promoted", "generation", "")
 		p := &Promotion{key, id, gctx, pipeline, *w.result, &speculativeStream{s, w, gctx}}
+		if id != "" && !slices.Equal(w.request.Messages, s.generationRequest.Messages) {
+			// Keep valid STT but discard an answer based on superseded history.
+			w.cancel()
+			w.deltas = nil
+			w.bytes = 0
+			w.notifyLocked()
+			p.Stream = nil
+			s.speculationEventLocked(w, "fallback", "llm", "conversation_changed")
+		}
 		s.mu.Unlock()
 		return p
 	}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/conversation"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/engine"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/backchannel"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/backchannel/multisignal"
@@ -32,6 +33,7 @@ type Server struct {
 	backchannelProvider backchannel.Provider
 	interruptionConfig  realtime.InterruptionConfig
 	server              *http.Server
+	conversationConfig  conversation.Config
 }
 
 // Configure before ListenAndServe; existing text/TTS clients do not need this.
@@ -58,6 +60,7 @@ func New(config Config, e *engine.Engine) *Server {
 		backchannelProvider: &multisignal.Policy{AllowAcousticRecovery: true},
 		interruptionConfig:  realtime.DefaultInterruptionConfig(),
 		speculationConfig:   realtime.DefaultSpeculationConfig(),
+		conversationConfig:  conversation.DefaultConfig(),
 	}
 
 	mux.HandleFunc("GET /health", s.handleHealth)
@@ -100,6 +103,15 @@ func (s *Server) SetSpeculationConfig(c realtime.SpeculationConfig) error {
 		return err
 	}
 	s.speculationConfig = c
+	return nil
+}
+
+// Trusted server configuration only; public clients cannot supply system roles.
+func (s *Server) SetConversationConfig(c conversation.Config) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	s.conversationConfig = c
 	return nil
 }
 

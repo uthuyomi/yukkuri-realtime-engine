@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,41 @@ import (
 
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm"
 )
+
+func TestConversationRolesAndSystemOverrideArePreserved(t *testing.T) {
+	captured := make(chan responsesRequest, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req responsesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+			return
+		}
+		captured <- req
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response.completed\"}\n\n")
+	}))
+	defer srv.Close()
+	p, err := New(Config{APIKey: "local-test", Model: "local-test", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := []llm.Message{{Role: "system", Content: "server override"}, {Role: "user", Content: "first"}, {Role: "assistant", Content: "heard response"}, {Role: "user", Content: "second"}}
+	stream, err := p.Generate(context.Background(), llm.Request{Messages: messages})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	req := <-captured
+	if req.Instructions != "" || len(req.Input) != 4 {
+		t.Fatal("provider overwrote conversation", req)
+	}
+	for i, m := range req.Input {
+		if m.Role != messages[i].Role || m.Content != messages[i].Content {
+			t.Fatal(req)
+		}
+	}
+}
 
 func TestStreamRequestCancellation(t *testing.T) {
 	serverDone := make(chan struct{})

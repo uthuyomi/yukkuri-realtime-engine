@@ -13,6 +13,8 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
         this.maxStoredFrames = Math.floor(sampleRate * 30);
 
         this.playedFrames = 0;
+        this.playedSourceFrames = 0;
+        this.hasSourceFrames = false;
         this.lastReportedFrames = 0;
 
         // Report playback progress approximately every 100 ms.
@@ -41,7 +43,7 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
                 case "audio":
                     this.enqueue(
                         message.generationId,
-                        message.samples
+                        message.samples, message.sourceFrames
                     );
                     break;
 
@@ -69,13 +71,15 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
         this.pauseID = null;
 
         this.playedFrames = 0;
+        this.playedSourceFrames = 0;
+        this.hasSourceFrames = false;
         this.lastReportedFrames = 0;
 
         this.activeGeneration =
             generationId;
     }
 
-    enqueue(generationId, samples) {
+    enqueue(generationId, samples, sourceFrames) {
         if (
             !generationId ||
             generationId !==
@@ -103,10 +107,12 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
             return;
         }
         this.storedFrames += data.length;
+        if (Number.isSafeInteger(sourceFrames) && sourceFrames >= 0) this.hasSourceFrames = true;
 
         this.queue.push({
             generationId,
-            samples: data
+            samples: data,
+            sourceFrames: Number.isSafeInteger(sourceFrames) && sourceFrames >= 0 ? sourceFrames : null
         });
     }
 
@@ -140,6 +146,7 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
         this.port.postMessage({
             type: "playback.paused", generationId, interruptionId,
             playedFrames: this.playedFrames, sampleRate,
+            playedSourceFrames: this.hasSourceFrames ? this.sourceProgress() : undefined,
             bufferedFrames: this.storedFrames - this.queueOffset
         });
     }
@@ -148,6 +155,13 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
         if (!generationId || generationId !== this.activeGeneration || !this.paused || interruptionId !== this.pauseID) return;
         this.paused = false;
         this.pauseID = null;
+    }
+
+    sourceProgress() {
+        const item = this.queue[0];
+        const partial = item && item.sourceFrames !== null
+            ? Math.floor(item.sourceFrames * this.queueOffset / item.samples.length) : 0;
+        return this.playedSourceFrames + partial;
     }
 
     reportProgress(force = false) {
@@ -178,7 +192,8 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
             playedFrames:
                 this.playedFrames,
 
-            sampleRate
+            sampleRate,
+            playedSourceFrames: this.hasSourceFrames ? this.sourceProgress() : undefined
         });
     }
 
@@ -270,6 +285,7 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
                 this.queueOffset >=
                 current.length
             ) {
+                if (item.sourceFrames !== null) this.playedSourceFrames += item.sourceFrames;
                 this.storedFrames -= current.length;
                 this.queue.shift();
                 this.queueOffset = 0;
@@ -280,7 +296,7 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
             this.playedFrames +=
                 consumedFrames;
 
-            this.reportProgress(false);
+            this.reportProgress(this.queue.length === 0);
         }
 
         return true;

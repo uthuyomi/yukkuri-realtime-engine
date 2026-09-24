@@ -1,5 +1,8 @@
 # Preemptive / Speculative Generation
 
+後続工程で追加した履歴 snapshot と昇格時の再検証は [Conversation Runtime](conversation-runtime.md) を参照。
+以下は Speculation 工程時点の実装報告。
+
 2026-09-24 実装報告。Turn / Interruption / Generation は既存の責務を維持し、
 Session に独立した Speculation Runtime を追加した。Whisper の方式・モデル・実行ファイル、
 Smart Turn、ブラウザの pause/resume、AquesTalk は変更していない。

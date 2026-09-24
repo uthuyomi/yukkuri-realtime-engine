@@ -9,6 +9,8 @@ import (
 	"sync"
 
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/audio"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/conversation"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/speech"
 )
 
@@ -26,24 +28,43 @@ type Session struct {
 	pipeline         *speech.Pipeline
 	timeline         *audio.PlaybackTimeline
 
-	inputAudioFormat InputAudioFormatData
-	inputAudioBuffer bytes.Buffer
-	inputAudioActive bool
-	input            *inputRuntime
-	responseCancel   context.CancelFunc
-	interruption     *interruptionRuntime
-	generationDone   bool
-	speculation      *speculationRuntime
+	inputAudioFormat    InputAudioFormatData
+	inputAudioBuffer    bytes.Buffer
+	inputAudioActive    bool
+	input               *inputRuntime
+	responseCancel      context.CancelFunc
+	interruption        *interruptionRuntime
+	generationDone      bool
+	speculation         *speculationRuntime
+	conversation        *conversation.Runtime
+	conversationUpdates chan ConversationUpdate
+	responseContext     context.Context
+	responseTurn        string
+	responseUsed        bool
+	generationTextOnly  bool
+	generationRequest   llm.Request
 }
 
 func NewSession(parent context.Context) *Session {
+	s, err := NewSessionWithConversation(parent, conversation.DefaultConfig())
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+func NewSessionWithConversation(parent context.Context, c conversation.Config) (*Session, error) {
+	r, err := conversation.New(newID("conv"), newID("item"), c)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(parent)
 
 	return &Session{
-		id:     newID("sess"),
-		ctx:    ctx,
-		cancel: cancel,
-	}
+		id:           newID("sess"),
+		ctx:          ctx,
+		cancel:       cancel,
+		conversation: r, conversationUpdates: make(chan ConversationUpdate, 64),
+	}, nil
 }
 
 func (s *Session) ID() string {
@@ -81,6 +102,13 @@ func (s *Session) StartGenerationForInput(ctx context.Context) (string, context.
 }
 
 func (s *Session) startGenerationLocked() (string, context.Context, *speech.Pipeline) {
+	return s.startGenerationWithTurnLocked(newID("turn"), false)
+}
+func (s *Session) startGenerationWithTurnLocked(turn string, textOnly bool) (string, context.Context, *speech.Pipeline) {
+	if s.ctx.Err() != nil {
+		return "", nil, nil
+	}
+	s.finalizeConversationLocked()
 	s.invalidateInterruptionLocked()
 	s.generationDone = false
 
@@ -115,6 +143,13 @@ func (s *Session) startGenerationLocked() (string, context.Context, *speech.Pipe
 	s.generationCancel = cancel
 	s.pipeline = pipeline
 	s.timeline = timeline
+	s.generationTextOnly = textOnly
+	s.generationRequest = llm.Request{}
+	if textOnly {
+		s.timeline = nil
+	}
+	s.conversation.BeginAssistant(newID("item"), turn, generationID, textOnly)
+	s.notifyConversationLocked(s.conversation.Assistant(generationID))
 
 	return generationID, ctx, pipeline
 }
@@ -137,6 +172,7 @@ func (s *Session) CancelGenerationID(id string) string {
 }
 
 func (s *Session) cancelGenerationLocked() string {
+	s.finalizeConversationLocked()
 	s.invalidateInterruptionLocked()
 	if s.timeline != nil {
 		s.timeline.SetPaused(false)
@@ -173,10 +209,17 @@ func (s *Session) cancelGenerationLocked() string {
 func (s *Session) MarkGenerationDone(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if id != s.generationID || s.generationCtx == nil || s.generationCtx.Err() != nil {
+	if id != s.generationID || s.generationCtx == nil || s.generationCtx.Err() != nil || s.generationDone {
 		return false
 	}
 	s.generationDone = true
+	p := s.conversation.Assistant(id)
+	before := p.Status
+	s.conversation.Done(id, true)
+	s.syncConversationPlaybackLocked()
+	if p.Status != before {
+		s.notifyConversationLocked(p)
+	}
 	return true // context stays alive while sent audio is still queued
 }
 
@@ -262,12 +305,7 @@ func (s *Session) CommitInputAudio() (
 func (s *Session) NewInputResponseContext() context.Context {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.responseCancel != nil {
-		s.responseCancel()
-	}
-	ctx, cancel := context.WithCancel(s.ctx)
-	s.responseCancel = cancel
-	return ctx
+	return s.newInputResponseContextLocked(newID("turn"))
 }
 
 func (s *Session) Close() {

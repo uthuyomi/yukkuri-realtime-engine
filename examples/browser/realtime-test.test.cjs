@@ -111,3 +111,14 @@ test('disconnect releases microphone and playback', async () => {
     assert.equal(run('microphoneStarted'), false);
     assert.equal(run('destroyed'), true);
 });
+
+
+test('resampled audio retains native frame counts for history acknowledgements', () => {
+    const {run} = browser();
+    run(`var posted=[]; playerNode={port:{postMessage(m){posted.push(m);}}};
+        audioContext={sampleRate:44100}; currentGenerationID='g1';
+        pendingAudio={generationId:'g1',sample_rate:8000,channels:1,bits_per_sample:16,bytes:6};
+        handleAudioBinary(new ArrayBuffer(6));`);
+    assert.equal(run('posted.at(-1).sourceFrames'), 3);
+    assert.equal(run('posted.at(-1).samples.length'), 17);
+});

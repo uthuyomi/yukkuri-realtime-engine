@@ -1,5 +1,8 @@
 # Realtime Input Runtime
 
+Multi-turn history and playback-aware context are documented in
+[Conversation Runtime](conversation-runtime.md).
+
 Current pause/cancel separation, backchannel policy and recovery are documented in
 [Interruption Recovery](interruption-recovery.md). The manifest below records the
 previous input-runtime milestone.

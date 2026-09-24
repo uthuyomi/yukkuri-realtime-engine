@@ -319,11 +319,7 @@ func (s *Session) commitTurnLocked(reason string) {
 		s.transitionLocked(TurnListening, "empty_turn")
 		return
 	}
-	if s.responseCancel != nil {
-		s.responseCancel()
-	}
-	ctx, cancel := context.WithCancel(s.ctx)
-	s.responseCancel = cancel
+	ctx := s.newInputResponseContextLocked(s.input.turnID)
 	s.input.state = TurnComplete
 	s.inputNotifyLocked(InputUpdate{State: TurnComplete, TurnID: s.input.turnID, Reason: reason, Audio: s.inputAudioBuffer.Bytes(), Context: ctx, SpeculationKey: key})
 	// Transfer backing storage to STT, rather than copying the whole utterance.

@@ -336,7 +336,7 @@ func (s *Session) recoverInterruptionLocked(kind backchannel.Kind, reason string
 
 // Playback acknowledgements use the rendered position (not receipt time) and
 // cannot move a different generation's timeline or resolve a different pause.
-func (s *Session) PlaybackPaused(generation, id string, seconds float64) error {
+func (s *Session) PlaybackPaused(generation, id string, seconds float64, source ...*int64) error {
 	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 {
 		return fmt.Errorf("invalid playback position")
 	}
@@ -346,8 +346,13 @@ func (s *Session) PlaybackPaused(generation, id string, seconds float64) error {
 		return nil
 	}
 	if s.timeline != nil {
-		snap := s.timeline.Snapshot()
-		s.timeline.SetPlayed(int64(seconds * float64(snap.SampleRate)))
+		if len(source) > 0 && source[0] != nil {
+			if err := s.recordSourcePlaybackLocked(*source[0]); err != nil {
+				return err
+			}
+		} else {
+			s.recordPlaybackLocked(seconds)
+		}
 		s.timeline.SetPaused(true)
 	}
 	return nil

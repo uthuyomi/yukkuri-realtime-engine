@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net/http"
 
 	"github.com/coder/websocket"
@@ -79,7 +78,11 @@ func (s *Server) handleRealtime(
 	defer conn.CloseNow()
 	conn.SetReadLimit(64 * 1024)
 
-	session := realtime.NewSession(r.Context())
+	session, err := realtime.NewSessionWithConversation(r.Context(), s.conversationConfig)
+	if err != nil {
+		log.Printf("configure conversation: %v", err)
+		return
+	}
 	defer session.Close()
 
 	writer := newRealtimeWriter(conn)
@@ -114,6 +117,7 @@ func (s *Server) handleRealtime(
 		"",
 		map[string]any{
 			"transport":               "websocket",
+			"conversation_id":         session.ConversationID(),
 			"interruption_timeout_ms": s.interruptionConfig.DecisionWindow.Milliseconds(),
 		},
 	)
@@ -127,6 +131,10 @@ func (s *Server) handleRealtime(
 	); err != nil {
 		return
 	}
+
+	conversationDone := make(chan struct{})
+	go func() { defer close(conversationDone); s.consumeConversationUpdates(session, writer) }()
+	defer func() { session.Close(); <-conversationDone }()
 
 	for {
 		messageType, payload, err :=
@@ -222,6 +230,9 @@ func (s *Server) processRealtimeEvent(
 			response,
 		)
 
+	case "input_text.commit":
+		return s.handleInputText(session, writer, event)
+
 	case "generation.create":
 		return s.handleGenerationCreate(
 			session,
@@ -258,6 +269,9 @@ func (s *Server) processRealtimeEvent(
 		)
 
 	case "response.text.done":
+		if event.Generation != "" && event.Generation != session.CurrentGeneration() {
+			return nil
+		}
 		return s.handleTextDone(
 			session,
 			writer,
@@ -278,7 +292,7 @@ func (s *Server) processRealtimeEvent(
 		case "interruption.suspected":
 			err = session.BeginInterruption(event.Generation, data.InterruptionID)
 		case "playback.paused":
-			err = session.PlaybackPaused(event.Generation, data.InterruptionID, data.PlayedSeconds)
+			err = session.PlaybackPaused(event.Generation, data.InterruptionID, data.PlayedSeconds, data.PlayedSourceFrames)
 		case "playback.overflow":
 			session.PlaybackFailed(event.Generation, "", "playback_overflow")
 		case "interruption.failed":
@@ -481,11 +495,7 @@ func (s *Server) transcribeInputAudio(
 			return
 		}
 
-		log.Printf(
-			"STT failed: session=%s: %v",
-			session.ID(),
-			err,
-		)
+		log.Printf("STT failed: session=%s", session.ID())
 
 		_ = sendRealtimeError(
 			ctx,
@@ -493,7 +503,7 @@ func (s *Server) transcribeInputAudio(
 			session.ID(),
 			"",
 			"stt_failed",
-			err.Error(),
+			"STT transcription failed",
 		)
 
 		return
@@ -516,10 +526,10 @@ func (s *Server) transcribeInputAudio(
 	}
 
 	log.Printf(
-		"STT transcript: session=%s language=%s text=%q",
+		"STT completed: session=%s language=%s bytes=%d",
 		session.ID(),
 		result.Language,
-		result.Text,
+		len(result.Text),
 	)
 
 	response, err := realtime.NewEvent(
@@ -529,6 +539,7 @@ func (s *Server) transcribeInputAudio(
 		map[string]any{
 			"text":     result.Text,
 			"language": result.Language,
+			"turn_id":  session.InputTurnID(ctx),
 		},
 	)
 	if err != nil {
@@ -588,8 +599,11 @@ func (s *Server) handleGenerationCreate(
 		}
 	}
 
+	if data.Output != "" && data.Output != "audio" && data.Output != "text" {
+		return sendRealtimeError(session.Context(), writer, session.ID(), "", "invalid_output", "output must be audio or text")
+	}
 	generationID, generationCtx, pipeline :=
-		session.StartGeneration()
+		session.StartGenerationMode(data.Output == "text")
 
 	created, err := realtime.NewEvent(
 		"generation.created",
@@ -611,16 +625,18 @@ func (s *Server) handleGenerationCreate(
 		return err
 	}
 
-	go s.runSpeechPipeline(
-		session,
-		writer,
-		generationCtx,
-		generationID,
-		pipeline,
-		data.Voice,
-		data.Speed,
-	)
+	if data.Output != "text" {
+		go s.runSpeechPipeline(
+			session,
+			writer,
+			generationCtx,
+			generationID,
+			pipeline,
+			data.Voice,
+			data.Speed,
+		)
 
+	}
 	return nil
 }
 
@@ -629,6 +645,10 @@ func (s *Server) handleTextDelta(
 	writer *realtimeWriter,
 	event realtime.Event,
 ) error {
+	id := session.CurrentGeneration()
+	if event.Generation != "" && event.Generation != id {
+		return nil
+	}
 	var data realtime.TextDeltaData
 
 	if err := json.Unmarshal(
@@ -662,6 +682,15 @@ func (s *Server) handleTextDelta(
 		)
 	}
 
+	if err := session.AppendAssistantText(id, data.Text, false); err != nil {
+		return err
+	}
+	if err := session.AppendAssistantText(id, data.Text, true); err != nil {
+		return err
+	}
+	if session.GenerationTextOnly(id) {
+		return nil
+	}
 	return pipeline.Push(data.Text)
 }
 
@@ -682,78 +711,20 @@ func (s *Server) handleTextDone(
 		)
 	}
 
+	id := session.CurrentGeneration()
+	session.MarkAssistantTextDone(id)
+	if session.GenerationTextOnly(id) {
+		return s.finishTextGeneration(session, writer, id)
+	}
 	return pipeline.Close()
 }
 
-func (s *Server) handlePlaybackProgress(
-	session *realtime.Session,
-	event realtime.Event,
-) error {
-	if event.Generation == "" {
-		return nil
-	}
-
-	timeline := session.Timeline()
-
-	if timeline == nil {
-		return nil
-	}
-
-	snapshot := timeline.Snapshot()
-
-	// Ignore delayed progress events from an older generation.
-	if snapshot.GenerationID != event.Generation {
-		return nil
-	}
-
+func (s *Server) handlePlaybackProgress(session *realtime.Session, event realtime.Event) error {
 	var data realtime.PlaybackProgressData
-
-	if err := json.Unmarshal(
-		event.Data,
-		&data,
-	); err != nil {
-		return fmt.Errorf(
-			"decode playback.progress: %w",
-			err,
-		)
+	if err := json.Unmarshal(event.Data, &data); err != nil {
+		return err
 	}
-
-	if data.PlayedSeconds < 0 || math.IsNaN(data.PlayedSeconds) || math.IsInf(data.PlayedSeconds, 0) {
-		return fmt.Errorf(
-			"invalid played_seconds: %f",
-			data.PlayedSeconds,
-		)
-	}
-
-	if snapshot.SampleRate <= 0 {
-		return nil
-	}
-
-	playedFrames :=
-		int64(
-			data.PlayedSeconds *
-				float64(
-					snapshot.SampleRate,
-				),
-		)
-
-	timeline.SetPlayed(
-		playedFrames,
-	)
-
-	updated :=
-		timeline.Snapshot()
-
-	log.Printf(
-		"playback progress: generation=%s played=%s sent=%s generated=%s buffered=%s",
-		event.Generation,
-		updated.PlayedDuration(),
-		updated.SentDuration(),
-		updated.GeneratedDuration(),
-		updated.BufferedDuration(),
-	)
-
-	return nil
+	return session.RecordPlayback(event.Generation, data.PlayedSeconds, data.PlayedSourceFrames)
 }
 
 func (s *Server) runSpeechPipeline(
@@ -792,10 +763,10 @@ func (s *Server) runSpeechPipeline(
 			}
 
 			log.Printf(
-				"speech chunk: generation=%s sequence=%d text=%q",
+				"speech chunk: generation=%s sequence=%d bytes=%d",
 				generationID,
 				chunk.Sequence,
-				chunk.Text,
+				len(chunk.Text),
 			)
 
 			if err := s.synthesizeSpeechChunk(
@@ -839,11 +810,10 @@ func (s *Server) synthesizeSpeechChunk(
 	speed float64,
 ) error {
 	log.Printf(
-		"AquesTalk input: generation=%s sequence=%d bytes=%d text=%q",
+		"AquesTalk input: generation=%s sequence=%d bytes=%d",
 		generationID,
 		chunk.Sequence,
 		len([]byte(chunk.Text)),
-		chunk.Text,
 	)
 
 	stream, err := s.engine.Synthesize(
@@ -915,15 +885,8 @@ func (s *Server) synthesizeSpeechChunk(
 
 	timeline := session.TimelineForGeneration(generationID)
 
-	if timeline != nil {
-		timeline.SetFormat(
-			pcm.SampleRate,
-			pcm.Channels,
-		)
-
-		timeline.AddGenerated(
-			generatedFrames,
-		)
+	if err := session.RegisterSpeechChunk(generationID, chunk, pcm.SampleRate, pcm.Channels, generatedFrames); err != nil {
+		return err
 	}
 
 	started, err := realtime.NewEvent(
@@ -1021,9 +984,7 @@ func (s *Server) synthesizeSpeechChunk(
 						bytesPerFrame,
 				)
 
-			timeline.AddSent(
-				sentFrames,
-			)
+			session.RecordAudioSent(generationID, sentFrames)
 		}
 
 		totalBytes += int64(len(audioData))
@@ -1089,114 +1050,51 @@ func sendRealtimeError(
 	return writer.Event(ctx, event)
 }
 
-func (s *Server) startLLMGeneration(
-	inputCtx context.Context,
-	session *realtime.Session,
-	writer *realtimeWriter,
-	userText string,
-) {
-	if s.llmProvider == nil {
-		_ = sendRealtimeError(
-			session.Context(),
-			writer,
-			session.ID(),
-			"",
-			"llm_not_configured",
-			"LLM provider is not configured",
-		)
-
-		return
-	}
-
-	generationID, generationCtx, pipeline :=
-		session.StartGenerationForInput(inputCtx)
-	if generationID == "" {
-		return
-	}
-
-	created, err := realtime.NewEvent(
-		"generation.created",
-		session.ID(),
-		generationID,
-		map[string]any{
-			"source":   "voice",
-			"provider": s.llmProvider.Name(),
-		},
-	)
+func (s *Server) startLLMGeneration(inputCtx context.Context, session *realtime.Session, writer *realtimeWriter, userText string, textMode ...bool) {
+	textOnly := len(textMode) > 0 && textMode[0]
+	id, ctx, pipeline, err := session.StartConversationResponse(inputCtx, userText, textOnly)
 	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			_ = sendRealtimeError(inputCtx, writer, session.ID(), "", "conversation_rejected", err.Error())
+		}
 		return
 	}
-
-	if err := writer.Event(
-		generationCtx,
-		created,
-	); err != nil {
+	if id == "" {
 		return
 	}
-
-	go s.runSpeechPipeline(
-		session,
-		writer,
-		generationCtx,
-		generationID,
-		pipeline,
-		"",
-		0,
-	)
-
-	go s.runLLMGeneration(
-		session,
-		writer,
-		generationCtx,
-		generationID,
-		pipeline,
-		userText,
-	)
+	if s.llmProvider == nil {
+		s.cancelFailedGeneration(session, writer, id)
+		_ = sendRealtimeError(session.Context(), writer, session.ID(), id, "llm_not_configured", "LLM provider is not configured")
+		return
+	}
+	created, err := realtime.NewEvent("generation.created", session.ID(), id, map[string]any{"source": map[bool]string{true: "text", false: "voice"}[textOnly], "provider": s.llmProvider.Name(), "output": map[bool]string{true: "text", false: "audio"}[textOnly]})
+	if err != nil || writer.Event(ctx, created) != nil {
+		s.cancelFailedGeneration(session, writer, id)
+		return
+	}
+	if !textOnly {
+		go s.runSpeechPipeline(session, writer, ctx, id, pipeline, "", 0)
+	}
+	go s.runLLMGeneration(session, writer, ctx, id, pipeline)
 }
 
-func (s *Server) runLLMGeneration(
-	session *realtime.Session,
-	writer *realtimeWriter,
-	ctx context.Context,
-	generationID string,
-	pipeline *speech.Pipeline,
-	userText string,
-) {
-	log.Printf(
-		"LLM generation started: generation=%s text=%q",
-		generationID,
-		userText,
-	)
-
-	stream, err := s.llmProvider.Generate(
-		ctx,
-		llm.Request{
-			Messages: []llm.Message{
-				{
-					Role:    "user",
-					Content: userText,
-				},
-			},
-		},
-	)
-	if err != nil {
-		s.cancelFailedGeneration(session, writer, generationID)
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-
-		_ = sendRealtimeError(
-			session.Context(),
-			writer,
-			session.ID(),
-			generationID,
-			"llm_failed",
-			err.Error(),
-		)
-
+func (s *Server) runLLMGeneration(session *realtime.Session, writer *realtimeWriter, ctx context.Context, generationID string, pipeline *speech.Pipeline) {
+	request, ok := session.GenerationRequest(generationID)
+	if !ok {
 		return
 	}
-
+	log.Printf("LLM generation started: generation=%s context_items=%d", generationID, len(request.Messages))
+	stream, err := s.llmProvider.Generate(ctx, request)
+	if err != nil || stream == nil {
+		if stream != nil {
+			_ = stream.Close()
+		}
+		if ctx.Err() == nil {
+			_ = sendRealtimeError(ctx, writer, session.ID(), generationID, "llm_failed", "LLM request failed")
+		}
+		s.cancelFailedGeneration(session, writer, generationID)
+		return
+	}
 	s.consumeLLMStream(session, writer, ctx, generationID, pipeline, stream)
 }
 
@@ -1208,101 +1106,52 @@ func (s *Server) consumeLLMStream(session *realtime.Session, writer *realtimeWri
 		}
 	}()
 	defer stream.Close()
-
+	textOnly := session.GenerationTextOnly(generationID)
 	for {
 		delta, err := stream.Recv()
-
 		if errors.Is(err, io.EOF) {
-			completed = true
-			if err := pipeline.Close(); err != nil {
-				if !errors.Is(err, context.Canceled) {
-					log.Printf(
-						"close speech pipeline failed: generation=%s: %v",
-						generationID,
-						err,
-					)
-				}
-			}
-
-			done, eventErr := realtime.NewEvent(
-				"response.text.done",
-				session.ID(),
-				generationID,
-				nil,
-			)
-
-			if eventErr == nil {
-				_ = writer.Event(
-					ctx,
-					done,
-				)
-			}
-
-			log.Printf(
-				"LLM generation completed: generation=%s",
-				generationID,
-			)
-
-			return
-		}
-
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
+			if !session.MarkAssistantTextDone(generationID) {
 				return
 			}
-
-			_ = sendRealtimeError(
-				session.Context(),
-				writer,
-				session.ID(),
-				generationID,
-				"llm_stream_failed",
-				err.Error(),
-			)
-
+			done, eventErr := realtime.NewEvent("response.text.done", session.ID(), generationID, nil)
+			if eventErr != nil || writer.Event(ctx, done) != nil {
+				return
+			}
+			if textOnly {
+				if s.finishTextGeneration(session, writer, generationID) != nil {
+					return
+				}
+			} else {
+				if pipeline.Close() != nil {
+					return
+				}
+			}
+			completed = true
 			return
 		}
-
+		if err != nil {
+			if ctx.Err() == nil {
+				_ = sendRealtimeError(ctx, writer, session.ID(), generationID, "llm_stream_failed", "LLM stream failed")
+			}
+			return
+		}
 		if delta.Text == "" {
 			continue
 		}
-
-		event, eventErr := realtime.NewEvent(
-			"response.text.delta",
-			session.ID(),
-			generationID,
-			realtime.TextDeltaData{
-				Text: delta.Text,
-			},
-		)
-		if eventErr != nil {
+		if err = session.AppendAssistantText(generationID, delta.Text, false); err != nil {
 			return
 		}
-
-		if err := writer.Event(
-			ctx,
-			event,
-		); err != nil {
+		event, eventErr := realtime.NewEvent("response.text.delta", session.ID(), generationID, realtime.TextDeltaData{Text: delta.Text})
+		if eventErr != nil || writer.Event(ctx, event) != nil {
 			return
 		}
-
-		if err := pipeline.Push(
-			delta.Text,
-		); err != nil {
-			if errors.Is(err, context.Canceled) {
+		if err = session.AppendAssistantText(generationID, delta.Text, true); err != nil {
+			return
+		}
+		if !textOnly {
+			if err = pipeline.Push(delta.Text); err != nil {
 				return
 			}
-
-			_ = sendRealtimeError(
-				session.Context(),
-				writer,
-				session.ID(),
-				generationID,
-				"speech_pipeline_failed",
-				err.Error(),
-			)
-
-			return
 		}
 	}
 }
