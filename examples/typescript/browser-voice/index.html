@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><title>Yukkuri SDK Browser Voice</title>
+<body>
+<h1>Yukkuri SDK Browser Voice</h1>
+<p>リポジトリrootをlocalhost HTTPで配信してください。SDK build、Engine、SmartTurn、STT、LLM、TTSが必要です。</p>
+<p>この例はSilero/ONNXを下記固定バージョンのCDNから取得します。アプリ配布時は同じassetを自前で配信できます。</p>
+<label>Engine URL <input id="url" value="http://127.0.0.1:8765"></label>
+<button id="connect">Connect / Start Audio</button><button id="mic" disabled>Start Microphone</button>
+<button id="stop" disabled>Stop Microphone</button><button id="close" disabled>Close</button>
+<form id="text"><input id="prompt" value="こんにちは"><select id="output"><option>text</option><option>audio</option></select><button>Send text</button></form>
+<pre id="status">Disconnected</pre><pre id="transcript"></pre><pre id="response"></pre>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"></script>
+<script type="module" src="./main.js"></script>
+</body></html>

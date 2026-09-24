@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Yukkuri Realtime Test</title>
+</head>
+
+<body>
+    <h1>Yukkuri Realtime Test</h1>
+
+    <button id="start-audio">
+        Start Audio
+    </button>
+
+    <button id="start-microphone">
+        Start Microphone
+    </button>
+
+    <button onclick="stopMicrophone()">Stop Microphone</button>
+
+    <span id="vad-status">
+        VAD: stopped
+    </span>
+
+    <p>
+        Start Audioを押してからDevTools Consoleでテストしてください。
+    </p>
+
+    <script>
+        const ENGINE_SAMPLE_RATE = 8000;
+
+        let audioContext = null;
+        let playerNode = null;
+
+        let microphoneVAD = null;
+        let microphoneStarted = false;
+        let microphoneStarting = false;
+        let userSpeaking = false;
+
+        let currentGenerationID = null;
+        let currentSpeechSequence = null;
+        let pendingAudio = null;
+        let pendingPause = null;
+        let pauseSequence = 0;
+        let pauseWatchdog = null;
+        let interruptionTimeoutMs = 1500;
+        let postedSourceFrames = 0;
+        let playedSourceFrames = 0;
+        let postedOutputFrames = 0;
+        let audioCreditSupported = false;
+        let renderedOutputFrames = 0;
+
+        let inputSampleRate = ENGINE_SAMPLE_RATE;
+        let inputChannels = 1;
+        let inputBits = 16;
+
+        const ws = new WebSocket(
+            "ws://127.0.0.1:8765/v1/realtime"
+        );
+
+        ws.binaryType = "arraybuffer";
+
+        ws.onopen = () => {
+            console.log("CONNECTED");
+        };
+
+        ws.onerror = (event) => {
+            console.error(
+                "WS ERROR:",
+                event
+            );
+        };
+
+        ws.onclose = (event) => {
+            void stopMicrophone();
+            stopPlayback();
+            console.log(
+                "CLOSED:",
+                event.code,
+                event.reason
+            );
+        };
+
+        ws.onmessage = (event) => {
+            if (typeof event.data === "string") {
+                handleEvent(
+                    JSON.parse(event.data)
+                );
+
+                return;
+            }
+
+            if (event.data instanceof ArrayBuffer) {
+                handleAudioBinary(event.data);
+            }
+        };
+
+        document
+            .getElementById("start-audio")
+            .addEventListener(
+                "click",
+                startAudio
+            );
+
+        document
+            .getElementById("start-microphone")
+            .addEventListener(
+                "click",
+                startMicrophone
+            );
+
+        async function startAudio() {
+            if (!audioContext) {
+                audioContext = new AudioContext();
+
+                await audioContext.audioWorklet.addModule(
+                    "./audio-worklet.js"
+                );
+
+                playerNode = new AudioWorkletNode(
+                    audioContext,
+                    "pcm-player",
+                    {
+                        numberOfInputs: 0,
+                        numberOfOutputs: 1,
+                        outputChannelCount: [1]
+                    }
+                );
+
+                playerNode.port.onmessage = event => handlePlaybackMessage(event.data);
+
+                playerNode.connect(
+                    audioContext.destination
+                );
+            }
+
+            if (audioContext.state !== "running") {
+                await audioContext.resume();
+            }
+
+            console.log(
+                "AUDIO READY:",
+                audioContext.sampleRate
+            );
+        }
+
+        async function startMicrophone() {
+            if (microphoneStarted || microphoneStarting) return;
+            microphoneStarting = true;
+            try {
+                if (ws.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not connected");
+                await startAudio();
+                microphoneVAD = await vad.MicVAD.new({
+                    startOnLoad: false,
+                    model: "v5",
+                    redemptionMs: 160,
+                    minSpeechMs: 96,
+                    onnxWASMBasePath: "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/",
+                    baseAssetPath: "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/",
+                    // Silero supplies continuous resampled 16 kHz frames, including silence.
+                    onFrameProcessed: (_probabilities, frame) => sendInputFrame(frame),
+                    onSpeechStart: handleUserSpeechStart,
+                    onSpeechEnd: handleUserSpeechEnd,
+                    onVADMisfire: handleVADMisfire
+                });
+                sendInputEvent("input_audio.start", {
+                    sample_rate: 16000, channels: 1, encoding: "pcm_s16le", mode: "realtime"
+                });
+                microphoneStarted = true;
+                await microphoneVAD.start();
+                setVADStatus("listening");
+            } catch (error) {
+                await stopMicrophone();
+                console.error("Microphone failed", error);
+                setVADStatus("error");
+            } finally {
+                microphoneStarting = false;
+            }
+        }
+
+        function sendInputEvent(type, data) {
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type, data}));
+        }
+
+        function sendInputFrame(frame) {
+            if (!microphoneStarted || ws.readyState !== WebSocket.OPEN) return;
+            if (ws.bufferedAmount > 256 * 1024) {
+                console.error("Input connection cannot keep up; stopping microphone");
+                void stopMicrophone();
+                return;
+            }
+            const bytes = new ArrayBuffer(frame.length * 2);
+            const view = new DataView(bytes);
+            for (let i = 0; i < frame.length; i++) {
+                const sample = Math.max(-1, Math.min(1, frame[i]));
+                view.setInt16(i * 2, sample < 0 ? sample * 32768 : sample * 32767, true);
+            }
+            ws.send(bytes);
+        }
+
+        async function stopMicrophone() {
+            microphoneStarted = false;
+            userSpeaking = false;
+            sendInputEvent("input_audio.stop");
+            const instance = microphoneVAD;
+            microphoneVAD = null;
+            if (instance) {
+                try { await instance.destroy(); } catch (error) { console.error("VAD cleanup failed", error); }
+            }
+            setVADStatus("stopped");
+        }
+
+        function handleUserSpeechStart() {
+            if (!microphoneStarted) return;
+            if (userSpeaking) {
+                return;
+            }
+
+            userSpeaking = true;
+
+            setVADStatus("speech");
+
+            console.log(
+                "USER SPEECH STARTED",
+                {
+                    generation:
+                        currentGenerationID
+                }
+            );
+
+            // Pause locally before sending anything to the server. Keep queued PCM.
+            const pause = currentGenerationID ? pausePlayback(currentGenerationID) : null;
+            ws.send(JSON.stringify({type: "input_audio.speech_start",
+                generation_id: pause?.generationId || "",
+                data: {interruption_id: pause?.interruptionId || ""}}));
+        }
+
+        function handleUserSpeechEnd() {
+            if (!microphoneStarted) return;
+            userSpeaking = false;
+            setVADStatus("waiting for turn decision");
+            sendInputEvent("input_audio.speech_end");
+        }
+
+        function handleVADMisfire() {
+            if (!microphoneStarted) return;
+            userSpeaking = false;
+            setVADStatus("listening");
+            sendInputEvent("input_audio.vad_misfire");
+        }
+
+        function clearPauseWatchdog() {
+            if (pauseWatchdog !== null) clearTimeout(pauseWatchdog);
+            pauseWatchdog = null;
+        }
+
+        function pausePlayback(generationId) {
+            clearPauseWatchdog();
+            const pause = {generationId, interruptionId: `pause_${++pauseSequence}`};
+            pendingPause = pause;
+            if (playerNode) playerNode.port.postMessage({type: "pause", ...pause});
+            // Lost responses or a wedged connection must not retain audio forever.
+            pauseWatchdog = setTimeout(() => {
+                if (pendingPause !== pause) return;
+                if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({
+                    type: "interruption.failed", generation_id: generationId,
+                    data: {interruption_id: pause.interruptionId}
+                }));
+                stopPlayback();
+            }, interruptionTimeoutMs + 1000);
+            return pause;
+        }
+
+        function recoverPlayback(message) {
+            if (!pendingPause || message.generation_id !== currentGenerationID ||
+                message.generation_id !== pendingPause.generationId ||
+                message.data.interruption_id !== pendingPause.interruptionId) return;
+            if (playerNode) playerNode.port.postMessage({type: "resume", ...pendingPause});
+            clearPauseWatchdog();
+            pendingPause = null;
+        }
+
+        function setVADStatus(
+            status
+        ) {
+            const element =
+                document.getElementById(
+                    "vad-status"
+                );
+
+            if (!element) {
+                return;
+            }
+
+            element.textContent =
+                "VAD: " + status;
+        }
+
+        function handleEvent(message) {
+            console.log(
+                "EVENT:",
+                {type: message.type, generation_id: message.generation_id,
+                    event_id: message.event_id, status: message.data?.status,
+                    state: message.data?.state}
+            );
+
+            switch (message.type) {
+                case "session.created":
+                    interruptionTimeoutMs = message.data.interruption_timeout_ms || 1500;
+                    audioCreditSupported = message.data.audio_flow_control === "credit-v1";
+                    if (audioCreditSupported) ws.send(JSON.stringify({type: "playback.configure", data: {flow_control: "credit-v1"}}));
+                    break;
+                case "interruption.recovered":
+                    recoverPlayback(message);
+                    break;
+                case "interruption.confirmed":
+                    if (message.generation_id === currentGenerationID) stopPlayback();
+                    break;
+                case "generation.done":
+                    if (message.generation_id === currentGenerationID && playerNode) {
+                        playerNode.port.postMessage({type: "done", generationId: currentGenerationID, sourceFrames: message.data?.source_frames});
+                    }
+                    break;
+                case "input_audio.turn":
+                    setVADStatus(message.data.state);
+                    if (message.data.error) console.error("Turn detector:", message.data.error);
+                    if (message.data.reason === "input_limit") void stopMicrophone();
+                    break;
+                case "error":
+                    console.error("Engine error:", message.data);
+                    if (message.data.code === "invalid_input_audio" || message.data.legacy_code === "invalid_input_audio" || message.data.code === "unsupported_format") void stopMicrophone();
+                    break;
+                case "generation.created":
+                    clearPauseWatchdog();
+                    pendingPause = null;
+                    pendingAudio = null;
+                    postedOutputFrames = 0;
+                    postedSourceFrames = 0; playedSourceFrames = 0;
+                    renderedOutputFrames = 0;
+                    currentGenerationID =
+                        message.generation_id;
+
+                    if (playerNode) {
+                        playerNode.port.postMessage({
+                            type: "generation",
+                            generationId:
+                                currentGenerationID
+                        });
+                    }
+
+                    if (userSpeaking) {
+                        const pause = pausePlayback(currentGenerationID);
+                        ws.send(JSON.stringify({type: "interruption.suspected", generation_id: currentGenerationID,
+                            data: {interruption_id: pause.interruptionId}}));
+                    }
+                    break;
+
+                case "response.audio.chunk.started":
+                    startAudioChunk(message);
+                    break;
+
+                case "response.audio.delta":
+                    pendingAudio = {generationId: message.generation_id, ...message.data};
+                    break;
+
+                case "response.audio.chunk.done":
+                    finishAudioChunk(message);
+                    break;
+
+                case "generation.cancelled":
+                    if (message.generation_id === currentGenerationID) stopPlayback();
+                    break;
+            }
+        }
+
+        function startAudioChunk(message) {
+            if (message.generation_id !== currentGenerationID) return;
+            playerNode?.port.postMessage({type: "format", generationId: currentGenerationID, sourceRate: message.data.sample_rate});
+            currentSpeechSequence =
+                message.data.sequence;
+
+            inputSampleRate =
+                message.data.sample_rate;
+
+            inputChannels =
+                message.data.channels;
+
+            inputBits =
+                message.data.bits_per_sample;
+
+            console.log(
+                "PCM CHUNK START:",
+                currentSpeechSequence,
+                inputSampleRate,
+                inputChannels,
+                inputBits
+            );
+        }
+
+        function handleAudioBinary(buffer) {
+            const audio = pendingAudio;
+            pendingAudio = null;
+            if (!audio || audio.generationId !== currentGenerationID || !playerNode || !audioContext) return;
+            if (audio.bits_per_sample !== 16 || audio.channels !== 1 ||
+                !Number.isInteger(audio.sample_rate) || audio.sample_rate < 1000 || audio.sample_rate > 192000 || buffer.byteLength !== audio.bytes || buffer.byteLength % 2) {
+                console.error("Invalid output PCM metadata");
+                ws.send(JSON.stringify({type: "playback.overflow", generation_id: audio.generationId,
+                    data: {interruption_id: pendingPause?.interruptionId || ""}}));
+                stopPlayback();
+                return;
+            }
+            const pcm16 = new Int16Array(buffer);
+            const samples = int16ToFloat32(pcm16);
+            const total = postedSourceFrames + samples.length;
+            // Include all in-flight MessagePort data, not just Worklet occupancy.
+            if (total - playedSourceFrames > audio.sample_rate * 30 ||
+                (audio.source_frames != null && audio.source_frames !== samples.length) ||
+                (audio.source_start_frame != null && audio.source_start_frame !== postedSourceFrames)) {
+                ws.send(JSON.stringify({type: "playback.overflow", generation_id: audio.generationId,
+                    data: {interruption_id: pendingPause?.interruptionId || ""}}));
+                stopPlayback();
+                return;
+            }
+            postedSourceFrames = total;
+            postedOutputFrames = Math.ceil(total * audioContext.sampleRate / audio.sample_rate);
+            playerNode.port.postMessage({type: "audio", generationId: audio.generationId, samples,
+                sourceRate: audio.sample_rate, sourceFrames: samples.length, sourceStartFrame: audio.source_start_frame,
+                speechSequence: audio.speech_sequence, audioSequence: audio.audio_sequence}, [samples.buffer]);
+        }
+
+        function finishAudioChunk(message) {
+            if (message.generation_id !== currentGenerationID) return;
+            console.log(
+                "PCM CHUNK DONE:",
+                message.data.sequence,
+                message.data.bytes,
+                "bytes"
+            );
+
+            currentSpeechSequence = null;
+        }
+
+        function int16ToFloat32(input) {
+            const output =
+                new Float32Array(input.length);
+
+            for (
+                let i = 0;
+                i < input.length;
+                i++
+            ) {
+                const value = input[i];
+
+                output[i] =
+                    value < 0
+                        ? value / 32768
+                        : value / 32767;
+            }
+
+            return output;
+        }
+
+        function handlePlaybackMessage(message) {
+            if (ws.readyState !== WebSocket.OPEN || !message.generationId || message.generationId !== currentGenerationID) return;
+            // Numeric/state metrics only. No transcript, semantic text or PCM.
+            window.audioRuntimeMetrics = message;
+            if (message.type === "playback.overflow") {
+                ws.send(JSON.stringify({type: "playback.progress", generation_id: message.generationId,
+                    data: {played_source_frames: message.playedSourceFrames, played_seconds: message.playedFrames / message.sampleRate}}));
+                ws.send(JSON.stringify({type: "playback.overflow", generation_id: message.generationId,
+                    data: {interruption_id: message.interruptionId || ""}}));
+                stopPlayback();
+                return;
+            }
+            if (!message.sampleRate || message.playedFrames == null) return;
+            renderedOutputFrames = Math.max(renderedOutputFrames, message.playedFrames);
+            playedSourceFrames = Math.max(playedSourceFrames, message.playedSourceFrames || 0);
+            if (audioCreditSupported && message.sourceRate && message.capacitySourceFrames > 0) {
+                ws.send(JSON.stringify({type: "playback.credit", generation_id: message.generationId, data: {
+                    capacity_source_frames: message.capacitySourceFrames,
+                    received_source_frames: message.receivedSourceFrames,
+                    played_source_frames: message.playedSourceFrames,
+                    buffered_source_frames: message.bufferedSourceFrames
+                }}));
+            }
+            if (message.type === "playback.progress" || message.type === "playback.paused") {
+                ws.send(JSON.stringify({type: message.type, generation_id: message.generationId,
+                    data: {played_seconds: message.playedFrames / message.sampleRate,
+                        played_source_frames: message.playedSourceFrames,
+                        interruption_id: message.interruptionId || ""}}));
+            }
+
+        }
+
+        function stopPlayback() {
+            clearPauseWatchdog();
+            pendingPause = null;
+            pendingAudio = null;
+            postedOutputFrames = 0;
+            postedSourceFrames = 0; playedSourceFrames = 0;
+            renderedOutputFrames = 0;
+            const cancelledGeneration =
+                currentGenerationID;
+
+            if (playerNode) {
+                playerNode.port.postMessage({
+                    type: "clear",
+                    generationId:
+                        cancelledGeneration
+                });
+            }
+
+            currentGenerationID = null;
+            currentSpeechSequence = null;
+
+            console.log(
+                "PLAYBACK CANCELLED:",
+                cancelledGeneration
+            );
+        }
+
+        window.ws = ws;
+        window.stopPlayback = stopPlayback;
+        window.startAudio = startAudio;
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"></script>
+</body>
+
+</html>

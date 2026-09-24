@@ -26,3 +26,13 @@ runtime/whisper/
 # Local turn inference environment and weights
 runtime/turn-detection/
 __pycache__/
+
+# SDK local dependencies and package artifacts
+node_modules/
+sdk/typescript/dist/
+sdk/python/dist/
+sdk/python/build/
+*.egg-info/
+.venv/
+*.tgz
+*.whl

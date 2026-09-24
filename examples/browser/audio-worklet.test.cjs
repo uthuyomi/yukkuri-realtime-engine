@@ -11,7 +11,7 @@ function player(options = {}, rate = 16000) {
         AudioWorkletProcessor: class { constructor() { this.port = {postMessage: m => messages.push(m)}; } },
         registerProcessor: (_name, type) => { Player = type; }
     };
-    vm.runInNewContext(fs.readFileSync(__dirname + '/audio-worklet.js', 'utf8'), context);
+    vm.runInNewContext(fs.readFileSync(__dirname + '/../../sdk/typescript/src/audio-worklet.js', 'utf8'), context);
     const p = new Player({processorOptions: {startupBufferMs: 0, lowWatermarkMs: 0, ...options}});
     const render = count => {const out = new Float32Array(count); p.process([], [[out]]); return [...out];};
     return {p, messages, render};

@@ -1,0 +1,20 @@
+{
+  "name": "@yukkuri-realtime/client",
+  "version": "0.1.0",
+  "description": "Public API v1 client for Yukkuri Realtime Engine",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "files": ["dist", "README.md"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./browser": { "types": "./dist/browser.d.ts", "import": "./dist/browser.js" },
+    "./audio-worklet.js": "./dist/audio-worklet.js"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/assets.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:package": "node scripts/package-smoke.mjs",
+    "prepack": "npm run build"
+  },
+  "devDependencies": { "typescript": "~5.9.3" }
+}

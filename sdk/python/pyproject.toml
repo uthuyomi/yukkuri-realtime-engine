@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yukkuri-realtime"
+version = "0.1.0"
+description = "Async Public API v1 SDK and CLI for Yukkuri Realtime Engine"
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.28,<1", "websockets>=15,<18"]
+readme = "README.md"
+
+[project.scripts]
+yukkuri = "yukkuri_realtime.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+yukkuri_realtime = ["py.typed"]

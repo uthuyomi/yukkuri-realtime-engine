@@ -19,7 +19,7 @@ function browser() {
         },
     };
     vm.createContext(sandbox);
-    const html = fs.readFileSync(__dirname + '/realtime-test.html', 'utf8');
+    const html = fs.readFileSync(__dirname + '/legacy-realtime-test.html', 'utf8');
     vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1], sandbox);
     return {sent, sandbox, timers, run: code => vm.runInContext(code, sandbox)};
 }
@@ -132,7 +132,7 @@ test('negotiated runtime grants initial credit from format and exact source cred
     sandbox.sampleRate = 44100;
     sandbox.AudioWorkletProcessor = class {constructor() {this.port = {postMessage: m => sandbox.handlePlaybackMessage(m)};}};
     sandbox.registerProcessor = (_name, type) => {Player = type;};
-    vm.runInContext(fs.readFileSync(__dirname + '/audio-worklet.js', 'utf8'), sandbox);
+    vm.runInContext(fs.readFileSync(__dirname + '/../../sdk/typescript/src/audio-worklet.js', 'utf8'), sandbox);
     const p = new Player();
     sandbox.testPort = {postMessage: m => p.port.onmessage({data:m})};
     run(`playerNode={port:testPort}; audioContext={sampleRate:44100};
