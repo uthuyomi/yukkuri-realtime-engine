@@ -17,6 +17,8 @@
         Start Microphone
     </button>
 
+    <button onclick="stopMicrophone()">Stop Microphone</button>
+
     <span id="vad-status">
         VAD: stopped
     </span>
@@ -33,6 +35,7 @@
 
         let microphoneVAD = null;
         let microphoneStarted = false;
+        let microphoneStarting = false;
         let userSpeaking = false;
 
         let currentGenerationID = null;
@@ -60,6 +63,8 @@
         };
 
         ws.onclose = (event) => {
+            void stopMicrophone();
+            stopPlayback();
             console.log(
                 "CLOSED:",
                 event.code,
@@ -180,58 +185,73 @@
         }
 
         async function startMicrophone() {
-            if (microphoneStarted) {
-                console.log("MICROPHONE ALREADY STARTED");
+            if (microphoneStarted || microphoneStarting) return;
+            microphoneStarting = true;
+            try {
+                if (ws.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not connected");
+                await startAudio();
+                microphoneVAD = await vad.MicVAD.new({
+                    startOnLoad: false,
+                    model: "v5",
+                    redemptionMs: 160,
+                    minSpeechMs: 96,
+                    onnxWASMBasePath: "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/",
+                    baseAssetPath: "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/",
+                    // Silero supplies continuous resampled 16 kHz frames, including silence.
+                    onFrameProcessed: (_probabilities, frame) => sendInputFrame(frame),
+                    onSpeechStart: handleUserSpeechStart,
+                    onSpeechEnd: handleUserSpeechEnd,
+                    onVADMisfire: handleVADMisfire
+                });
+                sendInputEvent("input_audio.start", {
+                    sample_rate: 16000, channels: 1, encoding: "pcm_s16le", mode: "realtime"
+                });
+                microphoneStarted = true;
+                await microphoneVAD.start();
+                setVADStatus("listening");
+            } catch (error) {
+                await stopMicrophone();
+                console.error("Microphone failed", error);
+                setVADStatus("error");
+            } finally {
+                microphoneStarting = false;
+            }
+        }
+
+        function sendInputEvent(type, data) {
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type, data}));
+        }
+
+        function sendInputFrame(frame) {
+            if (!microphoneStarted || ws.readyState !== WebSocket.OPEN) return;
+            if (ws.bufferedAmount > 256 * 1024) {
+                console.error("Input connection cannot keep up; stopping microphone");
+                void stopMicrophone();
                 return;
             }
+            const bytes = new ArrayBuffer(frame.length * 2);
+            const view = new DataView(bytes);
+            for (let i = 0; i < frame.length; i++) {
+                const sample = Math.max(-1, Math.min(1, frame[i]));
+                view.setInt16(i * 2, sample < 0 ? sample * 32768 : sample * 32767, true);
+            }
+            ws.send(bytes);
+        }
 
-            await startAudio();
-
-            console.log("INITIALIZING SILERO VAD");
-
-            microphoneVAD = await vad.MicVAD.new({
-                onnxWASMBasePath:
-                    "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/",
-
-                baseAssetPath:
-                    "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/",
-
-                onSpeechStart: () => {
-                    console.log(
-                        "SILERO CALLBACK: onSpeechStart"
-                    );
-
-                    handleUserSpeechStart();
-                },
-
-                onSpeechEnd: (audio) => {
-                    console.log(
-                        "SILERO CALLBACK: onSpeechEnd",
-                        audio?.length
-                    );
-
-                    handleUserSpeechEnd(audio);
-                },
-
-                onVADMisfire: () => {
-                    console.log(
-                        "SILERO CALLBACK: onVADMisfire"
-                    );
-
-                    handleVADMisfire();
-                }
-            });
-
-            await microphoneVAD.start();
-
-            microphoneStarted = true;
-
-            setVADStatus("listening");
-
-            console.log("MICROPHONE + SILERO VAD READY");
+        async function stopMicrophone() {
+            microphoneStarted = false;
+            userSpeaking = false;
+            sendInputEvent("input_audio.stop");
+            const instance = microphoneVAD;
+            microphoneVAD = null;
+            if (instance) {
+                try { await instance.destroy(); } catch (error) { console.error("VAD cleanup failed", error); }
+            }
+            setVADStatus("stopped");
         }
 
         function handleUserSpeechStart() {
+            if (!microphoneStarted) return;
             if (userSpeaking) {
                 return;
             }
@@ -248,149 +268,24 @@
                 }
             );
 
-            if (!currentGenerationID) {
-                return;
-            }
-
-            requestBargeIn(
-                currentGenerationID
-            );
+            // Playback interruption never waits for endpoint inference.
+            if (currentGenerationID) requestBargeIn(currentGenerationID);
+            else sendInputEvent("generation.cancel"); // also cancels pending STT
+            sendInputEvent("input_audio.speech_start");
         }
 
-        function handleUserSpeechEnd(audio) {
+        function handleUserSpeechEnd() {
+            if (!microphoneStarted) return;
             userSpeaking = false;
-
-            setVADStatus("listening");
-
-            if (
-                !audio ||
-                audio.length === 0
-            ) {
-                return;
-            }
-
-            console.log(
-                "USER SPEECH ENDED",
-                {
-                    samples: audio.length
-                }
-            );
-
-            sendUserSpeech(audio);
-        }
-
-        function sendUserSpeech(audio) {
-            if (
-                !ws ||
-                ws.readyState !== WebSocket.OPEN
-            ) {
-                return;
-            }
-
-            const pcm16 =
-                float32ToPCM16(audio);
-
-            const sampleRate = 16000;
-
-            ws.send(
-                JSON.stringify({
-                    type: "input_audio.start",
-                    data: {
-                        sample_rate: sampleRate,
-                        channels: 1,
-                        encoding: "pcm_s16le"
-                    }
-                })
-            );
-
-            /*
-             * Keep every WebSocket binary message
-             * comfortably below the server read limit.
-             *
-             * 16 KiB = 8192 PCM16 mono samples
-             *        = about 512 ms at 16 kHz.
-             */
-            const chunkSize = 16 * 1024;
-
-            const bytes =
-                new Uint8Array(
-                    pcm16.buffer,
-                    pcm16.byteOffset,
-                    pcm16.byteLength
-                );
-
-            for (
-                let offset = 0;
-                offset < bytes.length;
-                offset += chunkSize
-            ) {
-                const end =
-                    Math.min(
-                        offset + chunkSize,
-                        bytes.length
-                    );
-
-                const chunk =
-                    bytes.slice(
-                        offset,
-                        end
-                    );
-
-                ws.send(
-                    chunk.buffer
-                );
-            }
-
-            ws.send(
-                JSON.stringify({
-                    type: "input_audio.commit"
-                })
-            );
-
-            console.log(
-                "INPUT AUDIO STREAMED:",
-                pcm16.byteLength,
-                "bytes"
-            );
-        }
-
-        function float32ToPCM16(input) {
-            const output =
-                new Int16Array(
-                    input.length
-                );
-
-            for (
-                let i = 0;
-                i < input.length;
-                i++
-            ) {
-                const sample =
-                    Math.max(
-                        -1,
-                        Math.min(
-                            1,
-                            input[i]
-                        )
-                    );
-
-                output[i] =
-                    sample < 0
-                        ? sample * 32768
-                        : sample * 32767;
-            }
-
-            return output;
+            setVADStatus("waiting for turn decision");
+            sendInputEvent("input_audio.speech_end");
         }
 
         function handleVADMisfire() {
+            if (!microphoneStarted) return;
             userSpeaking = false;
-
             setVADStatus("listening");
-
-            console.log(
-                "VAD MISFIRE"
-            );
+            sendInputEvent("input_audio.vad_misfire");
         }
 
         function requestBargeIn(
@@ -458,7 +353,17 @@
             );
 
             switch (message.type) {
+                case "input_audio.turn":
+                    setVADStatus(message.data.state);
+                    if (message.data.error) console.error("Turn detector:", message.data.error);
+                    if (message.data.reason === "input_limit") void stopMicrophone();
+                    break;
+                case "error":
+                    console.error("Engine error:", message.data);
+                    if (message.data.code === "invalid_input_audio") void stopMicrophone();
+                    break;
                 case "generation.created":
+                    if (userSpeaking) { requestBargeIn(message.generation_id); break; }
                     currentGenerationID =
                         message.generation_id;
 

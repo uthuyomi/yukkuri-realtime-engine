@@ -15,6 +15,8 @@ import (
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm/openai"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/stt/whispercpp"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/tts/aquestalk"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/turndetection/smartturn"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/realtime"
 	httptransport "github.com/uthuyomi/yukkuri-realtime-engine/internal/transport/http"
 )
 
@@ -161,6 +163,32 @@ func main() {
 	server.SetLLMProvider(
 		openAIProvider,
 	)
+	turnURL := os.Getenv("TURN_DETECTOR_URL")
+	if turnURL == "" {
+		turnURL = "http://127.0.0.1:8766/predict"
+	}
+	turnProvider, err := smartturn.New(turnURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	endpoint := realtime.DefaultEndpointConfig()
+	for key, target := range map[string]*time.Duration{
+		"TURN_MIN_DELAY":    &endpoint.MinDelay,
+		"TURN_MAX_DELAY":    &endpoint.MaxDelay,
+		"TURN_MAX_DURATION": &endpoint.MaxTurnDuration,
+	} {
+		if value := os.Getenv(key); value != "" {
+			parsed, err := time.ParseDuration(value)
+			if err != nil {
+				log.Fatalf("%s: %v", key, err)
+			}
+			*target = parsed
+		}
+	}
+	if err := server.SetTurnDetector(turnProvider, endpoint); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Turn detector: %s endpoint=%s min=%s max=%s", turnProvider.Name(), turnURL, endpoint.MinDelay, endpoint.MaxDelay)
 
 	// --------------------------------------------------
 	// Start server

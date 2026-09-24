@@ -25,6 +25,12 @@ func (s *Server) handleInputAudioBinary(
 	writer *realtimeWriter,
 	payload []byte,
 ) error {
+	if session.RealtimeInputActive() {
+		if err := session.AppendRealtimeAudio(payload); err != nil {
+			return sendRealtimeError(session.Context(), writer, session.ID(), "", "invalid_input_audio", err.Error())
+		}
+		return nil
+	}
 	if len(payload) == 0 {
 		return nil
 	}
@@ -70,11 +76,21 @@ func (s *Server) handleRealtime(
 		return
 	}
 	defer conn.CloseNow()
+	conn.SetReadLimit(64 * 1024)
 
 	session := realtime.NewSession(r.Context())
 	defer session.Close()
 
 	writer := newRealtimeWriter(conn)
+	if s.turnProvider != nil {
+		if err := session.ConfigureInput(s.turnProvider, s.endpointConfig); err != nil {
+			log.Printf("configure input: %v", err)
+			return
+		}
+		inputDone := make(chan struct{})
+		go func() { defer close(inputDone); s.consumeInputUpdates(session, writer) }()
+		defer func() { session.Close(); <-inputDone }()
+	}
 
 	log.Printf(
 		"realtime session connected: %s",
@@ -255,7 +271,7 @@ func (s *Server) processRealtimeEvent(
 			)
 		}
 
-		if data.SampleRate <= 0 {
+		if data.SampleRate != 16000 {
 			return sendRealtimeError(
 				session.Context(),
 				writer,
@@ -288,13 +304,41 @@ func (s *Server) processRealtimeEvent(
 			)
 		}
 
+		if data.Mode == "realtime" {
+			if err := session.StartRealtimeInput(data); err != nil {
+				return sendRealtimeError(session.Context(), writer, session.ID(), "", "invalid_input_audio", err.Error())
+			}
+			return nil
+		}
+		if data.Mode != "" || session.RealtimeInputActive() {
+			return sendRealtimeError(session.Context(), writer, session.ID(), "", "invalid_input_audio", "stop realtime input before changing modes")
+		}
 		session.StartInputAudio(
 			data,
 		)
 
 		return nil
 
+	case "input_audio.speech_start", "input_audio.speech_end", "input_audio.vad_misfire":
+		var err error
+		if event.Type == "input_audio.speech_start" {
+			err = session.SpeechStart()
+		} else if event.Type == "input_audio.vad_misfire" {
+			err = session.VADMisfire()
+		} else {
+			err = session.SpeechEnd()
+		}
+		if err != nil {
+			return sendRealtimeError(session.Context(), writer, session.ID(), "", "invalid_vad_event", err.Error())
+		}
+		return nil
+	case "input_audio.cancel", "input_audio.stop":
+		session.CancelInput(event.Type == "input_audio.stop")
+		return nil
 	case "input_audio.commit":
+		if session.RealtimeInputActive() {
+			return sendRealtimeError(session.Context(), writer, session.ID(), "", "server_endpointing", "realtime turns are committed by the server")
+		}
 		audioData, format, ok :=
 			session.CommitInputAudio()
 
@@ -341,6 +385,7 @@ func (s *Server) processRealtimeEvent(
 		}
 
 		go s.transcribeInputAudio(
+			session.NewInputResponseContext(),
 			session,
 			writer,
 			audioData,
@@ -362,12 +407,19 @@ func (s *Server) processRealtimeEvent(
 }
 
 func (s *Server) transcribeInputAudio(
+	ctx context.Context,
 	session *realtime.Session,
 	writer *realtimeWriter,
 	audioData []byte,
 	format realtime.InputAudioFormatData,
 ) {
-	ctx := session.Context()
+	if ctx.Err() != nil {
+		return
+	}
+	if s.sttProvider == nil {
+		_ = sendRealtimeError(ctx, writer, session.ID(), "", "stt_not_configured", "STT provider is not configured")
+		return
+	}
 
 	result, err := s.sttProvider.Transcribe(
 		ctx,
@@ -395,7 +447,7 @@ func (s *Server) transcribeInputAudio(
 		)
 
 		_ = sendRealtimeError(
-			session.Context(),
+			ctx,
 			writer,
 			session.ID(),
 			"",
@@ -406,9 +458,12 @@ func (s *Server) transcribeInputAudio(
 		return
 	}
 
+	if ctx.Err() != nil {
+		return
+	}
 	if result == nil {
 		_ = sendRealtimeError(
-			session.Context(),
+			ctx,
 			writer,
 			session.ID(),
 			"",
@@ -445,7 +500,7 @@ func (s *Server) transcribeInputAudio(
 	}
 
 	if err := writer.Event(
-		session.Context(),
+		ctx,
 		response,
 	); err != nil {
 		log.Printf(
@@ -462,6 +517,7 @@ func (s *Server) transcribeInputAudio(
 	}
 
 	s.startLLMGeneration(
+		ctx,
 		session,
 		writer,
 		result.Text,
@@ -984,6 +1040,7 @@ func sendRealtimeError(
 }
 
 func (s *Server) startLLMGeneration(
+	inputCtx context.Context,
 	session *realtime.Session,
 	writer *realtimeWriter,
 	userText string,
@@ -1002,7 +1059,10 @@ func (s *Server) startLLMGeneration(
 	}
 
 	generationID, generationCtx, pipeline :=
-		session.StartGeneration()
+		session.StartGenerationForInput(inputCtx)
+	if generationID == "" {
+		return
+	}
 
 	created, err := realtime.NewEvent(
 		"generation.created",

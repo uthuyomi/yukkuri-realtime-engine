@@ -11,16 +11,32 @@ import (
 	"time"
 
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/engine"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/stt"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/tts"
-	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/turndetection"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/realtime"
 )
 
 type Server struct {
-	engine      *engine.Engine
-	sttProvider stt.Provider
-	llmProvider llm.Provider
-	server      *http.Server
+	engine         *engine.Engine
+	sttProvider    stt.Provider
+	llmProvider    llm.Provider
+	turnProvider   turndetection.Provider
+	endpointConfig realtime.EndpointConfig
+	server         *http.Server
+}
+
+// Configure before ListenAndServe; existing text/TTS clients do not need this.
+func (s *Server) SetTurnDetector(p turndetection.Provider, c realtime.EndpointConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if p == nil {
+		return fmt.Errorf("turn detector is nil")
+	}
+	s.turnProvider, s.endpointConfig = p, c
+	return nil
 }
 
 type Config struct {

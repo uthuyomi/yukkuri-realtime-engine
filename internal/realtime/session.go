@@ -29,6 +29,8 @@ type Session struct {
 	inputAudioFormat InputAudioFormatData
 	inputAudioBuffer bytes.Buffer
 	inputAudioActive bool
+	input            *inputRuntime
+	responseCancel   context.CancelFunc
 }
 
 func NewSession(parent context.Context) *Session {
@@ -56,6 +58,25 @@ func (s *Session) StartGeneration() (
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.responseCancel != nil {
+		s.responseCancel()
+		s.responseCancel = nil
+	}
+	return s.startGenerationLocked()
+}
+
+// StartGenerationForInput atomically rejects transcripts superseded by speech,
+// input cancellation or generation cancellation.
+func (s *Session) StartGenerationForInput(ctx context.Context) (string, context.Context, *speech.Pipeline) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ctx.Err() != nil || s.ctx.Err() != nil {
+		return "", nil, nil
+	}
+	return s.startGenerationLocked()
+}
+
+func (s *Session) startGenerationLocked() (string, context.Context, *speech.Pipeline) {
 
 	if s.generationCancel != nil {
 		s.generationCancel()
@@ -97,6 +118,10 @@ func (s *Session) CancelGeneration() string {
 	defer s.mu.Unlock()
 
 	id := s.generationID
+	if s.responseCancel != nil {
+		s.responseCancel()
+		s.responseCancel = nil
+	}
 
 	if s.generationCancel != nil {
 		s.generationCancel()
@@ -179,23 +204,34 @@ func (s *Session) CommitInputAudio() (
 		return nil, InputAudioFormatData{}, false
 	}
 
-	audio := append(
-		[]byte(nil),
-		s.inputAudioBuffer.Bytes()...,
-	)
+	audio := s.inputAudioBuffer.Bytes()
 
 	format := s.inputAudioFormat
 
-	s.inputAudioBuffer.Reset()
+	s.inputAudioBuffer = bytes.Buffer{}
 	s.inputAudioFormat = InputAudioFormatData{}
 	s.inputAudioActive = false
 
 	return audio, format, true
 }
 
+func (s *Session) NewInputResponseContext() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.responseCancel != nil {
+		s.responseCancel()
+	}
+	ctx, cancel := context.WithCancel(s.ctx)
+	s.responseCancel = cancel
+	return ctx
+}
+
 func (s *Session) Close() {
-	s.CancelGeneration()
 	s.cancel()
+	s.CancelGeneration()
+	if s.input != nil {
+		<-s.input.done
+	}
 }
 
 func newID(prefix string) string {

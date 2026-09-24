@@ -22,3 +22,7 @@ Thumbs.db
 
 # Local Whisper runtime / models
 runtime/whisper/
+
+# Local turn inference environment and weights
+runtime/turn-detection/
+__pycache__/

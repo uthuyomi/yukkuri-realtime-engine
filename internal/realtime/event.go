@@ -61,6 +61,7 @@ type InputAudioCommitData struct {
 }
 
 type InputAudioFormatData struct {
+	Mode       string `json:"mode,omitempty"`
 	SampleRate int    `json:"sample_rate"`
 	Channels   int    `json:"channels"`
 	Encoding   string `json:"encoding"`
