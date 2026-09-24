@@ -238,7 +238,13 @@ func (s *Session) endSpeech(valid bool) error {
 func (s *Session) CancelInput(stop bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.input == nil {
+	if s.input == nil || s.inputAudioFormat.Mode != "realtime" {
+		if s.responseCancel != nil {
+			s.responseCancel()
+			s.responseCancel = nil
+		}
+		s.inputAudioBuffer = bytes.Buffer{}
+		s.inputAudioActive = false
 		return
 	}
 	if stop {

@@ -329,7 +329,7 @@
                     break;
                 case "error":
                     console.error("Engine error:", message.data);
-                    if (message.data.code === "invalid_input_audio") void stopMicrophone();
+                    if (message.data.code === "invalid_input_audio" || message.data.legacy_code === "invalid_input_audio" || message.data.code === "unsupported_format") void stopMicrophone();
                     break;
                 case "generation.created":
                     clearPauseWatchdog();

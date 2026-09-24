@@ -2,26 +2,30 @@ package httptransport
 
 import (
 	"log"
-	"sync"
 
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/realtime"
 )
 
 func (s *Server) consumeInputUpdates(session *realtime.Session, writer *realtimeWriter) {
-	var workers sync.WaitGroup
-	defer workers.Wait()
 	for {
 		select {
 		case <-session.Context().Done():
 			return
 		case update := <-session.InputUpdates():
 			kind := update.EventType
+			if update.Error != "" {
+				update.Error = "turn detection failed"
+			}
 			var data any = update
 			if kind == "" {
 				kind = "input_audio.turn"
 			}
 			if update.Interruption != nil {
-				data = update.Interruption
+				safe := *update.Interruption
+				if safe.Error != "" {
+					safe.Error = "interruption classification failed"
+				}
+				data = safe
 			}
 			if update.Speculation != nil {
 				data = update.Speculation
@@ -36,9 +40,8 @@ func (s *Server) consumeInputUpdates(session *realtime.Session, writer *realtime
 				return
 			}
 			if len(update.Audio) > 0 {
-				workers.Add(1)
-				go func(u realtime.InputUpdate) {
-					defer workers.Done()
+				u := update
+				writer.Go(u.Context, func() {
 					if u.SpeculationKey != nil {
 						if p := session.PromoteSpeculation(u.Context, *u.SpeculationKey); p != nil {
 							s.runPromotedInput(session, writer, p)
@@ -46,7 +49,7 @@ func (s *Server) consumeInputUpdates(session *realtime.Session, writer *realtime
 						}
 					}
 					s.transcribeInputAudio(u.Context, session, writer, u.Audio, realtime.InputAudioFormatData{SampleRate: 16000, Channels: 1, Encoding: "pcm_s16le"})
-				}(update)
+				})
 			}
 		}
 	}

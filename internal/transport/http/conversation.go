@@ -3,6 +3,7 @@ package httptransport
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/protocol"
 	"io"
 	"strings"
 
@@ -35,6 +36,9 @@ func (s *Server) handleInputText(session *realtime.Session, writer *realtimeWrit
 	}
 	if d.Decode(new(any)) != io.EOF || strings.TrimSpace(data.Text) == "" || (data.Output != "" && data.Output != "text" && data.Output != "audio") {
 		return sendRealtimeError(session.Context(), writer, session.ID(), "", "invalid_text_input", "invalid text or output")
+	}
+	if s.llmProvider == nil || (data.Output == "audio" && !s.engine.HasTTS("")) {
+		return protocol.Error("provider_unavailable")
 	}
 	ctx, err := session.NewTextResponseContext()
 	if err != nil {

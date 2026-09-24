@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -66,19 +67,14 @@ func main() {
 		),
 	})
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("TTS unavailable: %v", err)
+	} else {
+		defer aq.Close()
+		if err := e.RegisterTTS(aq); err != nil {
+			log.Fatal(err)
+		}
+		log.Println("TTS configured")
 	}
-
-	defer aq.Close()
-
-	if err := e.RegisterTTS(aq); err != nil {
-		log.Fatal(err)
-	}
-
-	log.Printf(
-		"AquesTalk voices loaded: %v",
-		aq.VoiceNames(),
-	)
 
 	// --------------------------------------------------
 	// STT: whisper.cpp
@@ -101,13 +97,10 @@ func main() {
 		},
 	)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("STT unavailable: %v", err)
+	} else {
+		log.Println("STT configured")
 	}
-
-	log.Printf(
-		"STT provider loaded: %s",
-		whisper.Name(),
-	)
 
 	// --------------------------------------------------
 	// LLM: OpenAI
@@ -117,12 +110,6 @@ func main() {
 		"OPENAI_API_KEY",
 	)
 
-	if openAIAPIKey == "" {
-		log.Fatal(
-			"OPENAI_API_KEY is required",
-		)
-	}
-
 	openAIModel := os.Getenv(
 		"OPENAI_MODEL",
 	)
@@ -131,21 +118,17 @@ func main() {
 		openAIModel = "gpt-5.6-luna"
 	}
 
-	openAIProvider, err := openai.New(
-		openai.Config{
-			APIKey: openAIAPIKey,
-			Model:  openAIModel,
-		},
-	)
-	if err != nil {
-		log.Fatal(err)
+	var openAIProvider *openai.Provider
+	if openAIAPIKey != "" {
+		openAIProvider, err = openai.New(openai.Config{APIKey: openAIAPIKey, Model: openAIModel})
+		if err != nil {
+			log.Println("LLM unavailable: invalid configuration")
+		} else {
+			log.Println("LLM configured")
+		}
+	} else {
+		log.Println("LLM unavailable: not configured")
 	}
-
-	log.Printf(
-		"LLM provider loaded: %s model=%s",
-		openAIProvider.Name(),
-		openAIModel,
-	)
 
 	// --------------------------------------------------
 	// HTTP / Realtime server
@@ -153,18 +136,19 @@ func main() {
 
 	server := httptransport.New(
 		httptransport.Config{
-			Address: "127.0.0.1:8765",
+			Address:        "127.0.0.1:8765",
+			AllowedOrigins: strings.FieldsFunc(os.Getenv("API_ALLOWED_ORIGINS"), func(r rune) bool { return r == ',' }),
 		},
 		e,
 	)
 
-	server.SetSTTProvider(
-		whisper,
-	)
+	if whisper != nil {
+		server.SetSTTProvider(whisper)
+	}
 
-	server.SetLLMProvider(
-		openAIProvider,
-	)
+	if openAIProvider != nil {
+		server.SetLLMProvider(openAIProvider)
+	}
 	turnURL := os.Getenv("TURN_DETECTOR_URL")
 	if turnURL == "" {
 		turnURL = "http://127.0.0.1:8766/predict"

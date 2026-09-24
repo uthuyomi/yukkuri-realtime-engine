@@ -27,12 +27,12 @@ func (s *Server) runPromotedInput(session *realtime.Session, writer *realtimeWri
 	if p.Transcript.Text == "" {
 		return
 	}
-	created, err := realtime.NewEvent("generation.created", session.ID(), p.GenerationID, map[string]any{"source": "voice", "provider": s.llmProvider.Name(), "speculation_id": p.Key.ID})
+	created, err := realtime.NewEvent("generation.created", session.ID(), p.GenerationID, map[string]any{"source": "voice", "speculation_id": p.Key.ID})
 	if err != nil || writer.Event(p.Context, created) != nil {
 		s.cancelFailedGeneration(session, writer, p.GenerationID)
 		return
 	}
-	go s.runSpeechPipeline(session, writer, p.Context, p.GenerationID, p.Pipeline, "", 0)
+	writer.Go(p.Context, func() { s.runSpeechPipeline(session, writer, p.Context, p.GenerationID, p.Pipeline, "", 0) })
 	if p.Stream == nil {
 		s.runLLMGeneration(session, writer, p.Context, p.GenerationID, p.Pipeline)
 		return

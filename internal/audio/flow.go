@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+var ErrCreditTimeout = errors.New("audio credit timeout")
+
 // Credit is cumulative and measured exclusively in source PCM frames. Received
 // includes frames held by the resampler; capacity also covers data in flight.
 type Credit struct {
@@ -134,7 +136,7 @@ func (f *FlowController) Reserve(ctx context.Context, requested int64) (int64, e
 		case <-ctx.Done():
 			return 0, ctx.Err()
 		case <-expired:
-			return 0, errors.New("audio credit timeout")
+			return 0, ErrCreditTimeout
 		case <-changed:
 		}
 	}

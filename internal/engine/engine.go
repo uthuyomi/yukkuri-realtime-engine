@@ -84,3 +84,14 @@ func (e *Engine) Synthesize(
 
 	return provider.Synthesize(ctx, req)
 }
+
+// HasTTS exposes configured availability without leaking provider configuration.
+func (e *Engine) HasTTS(name string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if name == "" {
+		name = e.defaultTTS
+	}
+	_, ok := e.ttsProviders[name]
+	return ok
+}

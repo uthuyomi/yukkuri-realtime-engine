@@ -8,10 +8,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/conversation"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/engine"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/protocol"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/backchannel"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/backchannel/multisignal"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm"
@@ -23,6 +25,11 @@ import (
 )
 
 type Server struct {
+	rootContext         context.Context
+	rootCancel          context.CancelFunc
+	connections         chan struct{}
+	allowedOrigins      []string
+	localOrigins        bool
 	engine              *engine.Engine
 	sttProvider         stt.Provider
 	speculativeSTT      *limited.Provider
@@ -49,14 +56,19 @@ func (s *Server) SetTurnDetector(p turndetection.Provider, c realtime.EndpointCo
 }
 
 type Config struct {
-	Address string
+	Address             string
+	AllowedOrigins      []string
+	DisableLocalOrigins bool
 }
 
 func New(config Config, e *engine.Engine) *Server {
 	mux := http.NewServeMux()
+	rootContext, rootCancel := context.WithCancel(context.Background())
 
 	s := &Server{
-		engine:              e,
+		engine:      e,
+		rootContext: rootContext, rootCancel: rootCancel, connections: make(chan struct{}, protocol.MaxSessions), allowedOrigins: append([]string(nil), config.AllowedOrigins...), localOrigins: !config.DisableLocalOrigins,
+		endpointConfig:      realtime.DefaultEndpointConfig(),
 		backchannelProvider: &multisignal.Policy{AllowAcousticRecovery: true},
 		interruptionConfig:  realtime.DefaultInterruptionConfig(),
 		speculationConfig:   realtime.DefaultSpeculationConfig(),
@@ -64,12 +76,14 @@ func New(config Config, e *engine.Engine) *Server {
 	}
 
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /v1/capabilities", s.handleCapabilities)
+	mux.HandleFunc("GET /v1/transcription", s.handleTranscription)
 	mux.HandleFunc("POST /v1/audio/speech", s.handleSpeech)
 	mux.HandleFunc("GET /v1/realtime", s.handleRealtime)
 
 	s.server = &http.Server{
 		Addr:              config.Address,
-		Handler:           mux,
+		Handler:           s.publicMiddleware(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -94,7 +108,7 @@ func (s *Server) SetSTTProvider(
 		return
 	}
 	// One shared process budget for legacy, committed and speculative requests.
-	s.speculativeSTT = limited.New(provider, 2)
+	s.speculativeSTT = limited.New(provider, protocol.MaxSTT)
 	s.sttProvider = s.speculativeSTT
 }
 
@@ -134,7 +148,18 @@ func (s *Server) ListenAndServe() error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
-	return s.server.Shutdown(ctx)
+	s.rootCancel()
+	err := s.server.Shutdown(ctx)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for len(s.connections) > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	return err
 }
 
 type speechRequest struct {
@@ -142,10 +167,6 @@ type speechRequest struct {
 	Text     string  `json:"text"`
 	Voice    string  `json:"voice"`
 	Speed    float64 `json:"speed"`
-}
-
-type errorResponse struct {
-	Error string `json:"error"`
 }
 
 func (s *Server) handleHealth(
@@ -164,32 +185,51 @@ func (s *Server) handleSpeech(
 	defer r.Body.Close()
 
 	decoder := json.NewDecoder(
-		io.LimitReader(r.Body, 1<<20),
+		http.MaxBytesReader(w, r.Body, protocol.MaxHTTPBytes),
 	)
 	decoder.DisallowUnknownFields()
 
 	var request speechRequest
 
 	if err := decoder.Decode(&request); err != nil {
-		writeError(
-			w,
-			http.StatusBadRequest,
-			fmt.Sprintf("invalid request: %v", err),
-		)
+		code := "invalid_request"
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			code = "payload_too_large"
+		}
+		status := 400
+		if code == "payload_too_large" {
+			status = 413
+		}
+		writePublicError(w, status, protocol.Error(code))
 		return
 	}
-
-	if request.Text == "" {
-		writeError(
-			w,
-			http.StatusBadRequest,
-			"text is required",
-		)
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writePublicError(w, 413, protocol.Error("payload_too_large"))
+		} else {
+			writePublicError(w, 400, protocol.Error("invalid_request"))
+		}
 		return
 	}
+	if strings.TrimSpace(request.Text) == "" || request.Speed < 0 {
+		writePublicError(w, 400, protocol.Error("invalid_request"))
+		return
+	}
+	if len(request.Text) > protocol.MaxTextBytes {
+		writePublicError(w, 413, protocol.Error("payload_too_large"))
+		return
+	}
+	if !s.engine.HasTTS(request.Provider) {
+		writePublicError(w, 503, protocol.Error("provider_unavailable"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), protocol.ProviderTimeout)
+	defer cancel()
 
 	stream, err := s.engine.Synthesize(
-		r.Context(),
+		ctx,
 		request.Provider,
 		tts.Request{
 			Text:  request.Text,
@@ -197,15 +237,20 @@ func (s *Server) handleSpeech(
 			Speed: request.Speed,
 		},
 	)
-	if err != nil {
-		writeError(
-			w,
-			http.StatusBadRequest,
-			err.Error(),
-		)
+	if stream != nil && stream.Audio != nil {
+		defer stream.Audio.Close()
+	}
+	if err != nil || stream == nil || stream.Audio == nil || ctx.Err() != nil {
+		log.Printf("TTS failed: request=%s", w.Header().Get("X-Request-ID"))
+		code := "generation_failed"
+		status := 502
+		if ctx.Err() == context.DeadlineExceeded {
+			code = "timeout"
+			status = 504
+		}
+		writePublicError(w, status, protocol.Error(code))
 		return
 	}
-	defer stream.Audio.Close()
 
 	switch stream.Format.Codec {
 	case "wav":
@@ -231,18 +276,8 @@ func (s *Server) handleSpeech(
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := io.Copy(w, stream.Audio); err != nil {
-		log.Printf("failed to stream speech response: %v", err)
+		log.Printf("speech stream failed: request=%s error_type=%T", w.Header().Get("X-Request-ID"), err)
 	}
-}
-
-func writeError(
-	w http.ResponseWriter,
-	status int,
-	message string,
-) {
-	writeJSON(w, status, errorResponse{
-		Error: message,
-	})
 }
 
 func writeJSON(

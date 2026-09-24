@@ -10,6 +10,7 @@ import (
 
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/audio"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/conversation"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/protocol"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/speech"
 )
@@ -20,7 +21,9 @@ type Session struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu sync.Mutex
+	mu        sync.Mutex
+	closeOnce sync.Once
+	closeDone chan struct{}
 
 	generationID        string
 	generationCtx       context.Context
@@ -63,6 +66,7 @@ func NewSessionWithConversation(parent context.Context, c conversation.Config) (
 
 	return &Session{
 		id:           newID("sess"),
+		closeDone:    make(chan struct{}),
 		ctx:          ctx,
 		cancel:       cancel,
 		conversation: r, conversationUpdates: make(chan ConversationUpdate, 64),
@@ -277,9 +281,7 @@ func (s *Session) AppendInputAudio(
 		return false
 	}
 
-	_, _ = s.inputAudioBuffer.Write(data)
-
-	return true
+	return audio.AppendPCM16(&s.inputAudioBuffer, data, protocol.MaxInputBytes) == nil
 }
 
 func (s *Session) CommitInputAudio() (
@@ -311,7 +313,7 @@ func (s *Session) NewInputResponseContext() context.Context {
 	return s.newInputResponseContextLocked(newID("turn"))
 }
 
-func (s *Session) Close() {
+func (s *Session) closeRuntime() {
 	s.cancel()
 	s.CancelGeneration()
 	if s.input != nil {
@@ -335,4 +337,26 @@ func newID(prefix string) string {
 	return prefix +
 		"_" +
 		hex.EncodeToString(buffer[:])
+}
+
+// CloseWithin bounds public shutdown even if an external provider violates its
+// context contract; cancellation happens before waiting for runtime workers.
+func (s *Session) startClose() <-chan struct{} {
+	s.cancel()
+	s.closeOnce.Do(func() { go func() { defer close(s.closeDone); s.closeRuntime() }() })
+	return s.closeDone
+}
+func (s *Session) Close() { <-s.startClose() }
+func (s *Session) CloseWithin(ctx context.Context) bool {
+	select {
+	case <-s.startClose():
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+func (s *Session) InputAudioBytes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inputAudioBuffer.Len()
 }

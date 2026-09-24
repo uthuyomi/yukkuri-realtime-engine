@@ -1,0 +1,540 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "generation.cancel"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "output": {
+              "type": "string"
+            },
+            "speed": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "voice": {
+              "type": "string"
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "generation.create"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "input_audio.cancel"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "input_audio.commit"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "input_audio.speech_end"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "interruption_id": {
+              "type": "string"
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "input_audio.speech_start"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "channels": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "encoding": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string"
+            },
+            "sample_rate": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "channels",
+            "encoding",
+            "sample_rate"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "input_audio.start"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "input_audio.stop"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "input_audio.vad_misfire"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": false,
+          "properties": {
+            "output": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "input_text.commit"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "interruption_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "interruption_id"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "interruption.failed"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "interruption_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "interruption_id"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "interruption.suspected"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "ping"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "flow_control": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "flow_control"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "playback.configure"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "buffered_source_frames": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "capacity_source_frames": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "played_source_frames": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "received_source_frames": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "buffered_source_frames",
+            "capacity_source_frames",
+            "played_source_frames",
+            "received_source_frames"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "playback.credit"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "interruption_id": {
+              "type": "string"
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "playback.overflow"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "interruption_id": {
+              "type": "string"
+            },
+            "played_seconds": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "played_source_frames": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "interruption_id"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "playback.paused"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "played_seconds": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "played_source_frames": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "playback.progress"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "response.text.delta"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "response.text.done"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {},
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "session.close"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "data": {
+          "additionalProperties": true,
+          "properties": {
+            "audio_flow_control": {
+              "type": "string"
+            },
+            "protocol_version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol_version"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "session.configure"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Yukkuri protocol v1 client event (structural subset)"
+}

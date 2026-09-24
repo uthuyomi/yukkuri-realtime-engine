@@ -1,18 +1,9 @@
 package realtime
 
-import (
-	"encoding/json"
-	"time"
-)
+import "github.com/uthuyomi/yukkuri-realtime-engine/internal/protocol"
 
-type Event struct {
-	Type       string          `json:"type"`
-	SessionID  string          `json:"session_id,omitempty"`
-	EventID    string          `json:"event_id,omitempty"`
-	Generation string          `json:"generation_id,omitempty"`
-	Timestamp  time.Time       `json:"timestamp"`
-	Data       json.RawMessage `json:"data,omitempty"`
-}
+// Compatibility alias: public wire ownership lives in protocol.
+type Event = protocol.Event
 
 type GenerationCreateData struct {
 	Voice  string  `json:"voice,omitempty"`
@@ -24,32 +15,7 @@ type TextDeltaData struct {
 	Text string `json:"text"`
 }
 
-func NewEvent(
-	eventType string,
-	sessionID string,
-	generationID string,
-	data any,
-) (Event, error) {
-	var raw json.RawMessage
-
-	if data != nil {
-		encoded, err := json.Marshal(data)
-		if err != nil {
-			return Event{}, err
-		}
-
-		raw = encoded
-	}
-
-	return Event{
-		Type:       eventType,
-		SessionID:  sessionID,
-		EventID:    newID("evt"),
-		Generation: generationID,
-		Timestamp:  time.Now().UTC(),
-		Data:       raw,
-	}, nil
-}
+var NewEvent = protocol.NewEvent
 
 type PlaybackProgressData struct {
 	PlayedSeconds      float64 `json:"played_seconds"`
@@ -68,9 +34,4 @@ type InputAudioCommitData struct {
 	Bytes      int `json:"bytes"`
 }
 
-type InputAudioFormatData struct {
-	Mode       string `json:"mode,omitempty"`
-	SampleRate int    `json:"sample_rate"`
-	Channels   int    `json:"channels"`
-	Encoding   string `json:"encoding"`
-}
+type InputAudioFormatData = protocol.InputAudioFormatData
