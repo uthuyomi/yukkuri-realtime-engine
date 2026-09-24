@@ -22,9 +22,11 @@ type PlaybackSnapshot struct {
 	SampleRate int
 	Channels   int
 
-	GeneratedFrames int64
-	SentFrames      int64
-	PlayedFrames    int64
+	GeneratedFrames   int64
+	SentFrames        int64
+	PlayedFrames      int64
+	Paused            bool
+	PausePlayedFrames int64
 
 	StartedAt time.Time
 	UpdatedAt time.Time
@@ -48,9 +50,11 @@ type PlaybackTimeline struct {
 	sampleRate int
 	channels   int
 
-	generatedFrames int64
-	sentFrames      int64
-	playedFrames    int64
+	generatedFrames   int64
+	sentFrames        int64
+	playedFrames      int64
+	paused            bool
+	pausePlayedFrames int64
 
 	startedAt time.Time
 	updatedAt time.Time
@@ -150,6 +154,20 @@ func (t *PlaybackTimeline) SetPlayed(
 	}
 
 	t.playedFrames = frames
+	if t.paused {
+		t.pausePlayedFrames = frames
+	}
+	t.updatedAt = time.Now().UTC()
+}
+
+// Pausing does not discard sent frames or advance the audible position.
+func (t *PlaybackTimeline) SetPaused(paused bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.paused = paused
+	if paused {
+		t.pausePlayedFrames = t.playedFrames
+	}
 	t.updatedAt = time.Now().UTC()
 }
 
@@ -164,9 +182,11 @@ func (t *PlaybackTimeline) Snapshot() PlaybackSnapshot {
 		SampleRate: t.sampleRate,
 		Channels:   t.channels,
 
-		GeneratedFrames: t.generatedFrames,
-		SentFrames:      t.sentFrames,
-		PlayedFrames:    t.playedFrames,
+		GeneratedFrames:   t.generatedFrames,
+		SentFrames:        t.sentFrames,
+		PlayedFrames:      t.playedFrames,
+		Paused:            t.paused,
+		PausePlayedFrames: t.pausePlayedFrames,
 
 		StartedAt: t.startedAt,
 		UpdatedAt: t.updatedAt,

@@ -11,20 +11,27 @@ import (
 	"time"
 
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/engine"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/backchannel"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/backchannel/multisignal"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/stt"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/stt/limited"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/tts"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/turndetection"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/realtime"
 )
 
 type Server struct {
-	engine         *engine.Engine
-	sttProvider    stt.Provider
-	llmProvider    llm.Provider
-	turnProvider   turndetection.Provider
-	endpointConfig realtime.EndpointConfig
-	server         *http.Server
+	engine              *engine.Engine
+	sttProvider         stt.Provider
+	speculativeSTT      *limited.Provider
+	speculationConfig   realtime.SpeculationConfig
+	llmProvider         llm.Provider
+	turnProvider        turndetection.Provider
+	endpointConfig      realtime.EndpointConfig
+	backchannelProvider backchannel.Provider
+	interruptionConfig  realtime.InterruptionConfig
+	server              *http.Server
 }
 
 // Configure before ListenAndServe; existing text/TTS clients do not need this.
@@ -47,7 +54,10 @@ func New(config Config, e *engine.Engine) *Server {
 	mux := http.NewServeMux()
 
 	s := &Server{
-		engine: e,
+		engine:              e,
+		backchannelProvider: &multisignal.Policy{AllowAcousticRecovery: true},
+		interruptionConfig:  realtime.DefaultInterruptionConfig(),
+		speculationConfig:   realtime.DefaultSpeculationConfig(),
 	}
 
 	mux.HandleFunc("GET /health", s.handleHealth)
@@ -63,10 +73,34 @@ func New(config Config, e *engine.Engine) *Server {
 	return s
 }
 
+func (s *Server) SetBackchannelProvider(p backchannel.Provider, c realtime.InterruptionConfig) error {
+	if p == nil || c.DecisionWindow < 300*time.Millisecond || c.DecisionWindow > 5*time.Second {
+		return fmt.Errorf("invalid interruption configuration")
+	}
+	s.backchannelProvider = p
+	s.interruptionConfig = c
+	return nil
+}
+
 func (s *Server) SetSTTProvider(
 	provider stt.Provider,
 ) {
-	s.sttProvider = provider
+	if provider == nil {
+		s.sttProvider = nil
+		s.speculativeSTT = nil
+		return
+	}
+	// One shared process budget for legacy, committed and speculative requests.
+	s.speculativeSTT = limited.New(provider, 2)
+	s.sttProvider = s.speculativeSTT
+}
+
+func (s *Server) SetSpeculationConfig(c realtime.SpeculationConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	s.speculationConfig = c
+	return nil
 }
 
 func (s *Server) SetLLMProvider(

@@ -31,6 +31,9 @@ type Session struct {
 	inputAudioActive bool
 	input            *inputRuntime
 	responseCancel   context.CancelFunc
+	interruption     *interruptionRuntime
+	generationDone   bool
+	speculation      *speculationRuntime
 }
 
 func NewSession(parent context.Context) *Session {
@@ -58,6 +61,7 @@ func (s *Session) StartGeneration() (
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.invalidateSpeculationLocked("generation_replaced")
 	if s.responseCancel != nil {
 		s.responseCancel()
 		s.responseCancel = nil
@@ -77,6 +81,8 @@ func (s *Session) StartGenerationForInput(ctx context.Context) (string, context.
 }
 
 func (s *Session) startGenerationLocked() (string, context.Context, *speech.Pipeline) {
+	s.invalidateInterruptionLocked()
+	s.generationDone = false
 
 	if s.generationCancel != nil {
 		s.generationCancel()
@@ -116,6 +122,25 @@ func (s *Session) startGenerationLocked() (string, context.Context, *speech.Pipe
 func (s *Session) CancelGeneration() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.invalidateSpeculationLocked("generation_cancelled")
+	return s.cancelGenerationLocked()
+}
+
+func (s *Session) CancelGenerationID(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id != "" && id != s.generationID {
+		return ""
+	}
+	s.invalidateSpeculationLocked("generation_cancelled")
+	return s.cancelGenerationLocked()
+}
+
+func (s *Session) cancelGenerationLocked() string {
+	s.invalidateInterruptionLocked()
+	if s.timeline != nil {
+		s.timeline.SetPaused(false)
+	}
 
 	id := s.generationID
 	if s.responseCancel != nil {
@@ -143,6 +168,25 @@ func (s *Session) CancelGeneration() string {
 	// interruption handling and observability.
 
 	return id
+}
+
+func (s *Session) MarkGenerationDone(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id != s.generationID || s.generationCtx == nil || s.generationCtx.Err() != nil {
+		return false
+	}
+	s.generationDone = true
+	return true // context stays alive while sent audio is still queued
+}
+
+func (s *Session) TimelineForGeneration(id string) *audio.PlaybackTimeline {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id != s.generationID {
+		return nil
+	}
+	return s.timeline
 }
 
 func (s *Session) CurrentGeneration() string {
@@ -231,6 +275,9 @@ func (s *Session) Close() {
 	s.CancelGeneration()
 	if s.input != nil {
 		<-s.input.done
+	}
+	if s.speculation != nil {
+		s.speculation.workers.Wait()
 	}
 }
 

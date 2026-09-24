@@ -132,6 +132,13 @@ func readType(t *testing.T, c *websocket.Conn, ctx context.Context, kind string)
 }
 func TestRealtimeEndpointAndBargeIn(t *testing.T) {
 	s := New(Config{}, engine.New())
+	// Preserve the non-speculative endpoint regression; speculation has its own
+	// wire-level commit-barrier and cancellation tests.
+	cfg := realtime.DefaultSpeculationConfig()
+	cfg.Enabled = false
+	if err := s.SetSpeculationConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
 	st := &testSTT{calls: make(chan stt.Request, 2), text: "こんにちは"}
 	s.SetSTTProvider(st)
 	lm := &testLLM{calls: make(chan llm.Request, 1)}

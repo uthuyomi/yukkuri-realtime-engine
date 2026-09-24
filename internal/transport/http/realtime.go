@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 
 	"github.com/coder/websocket"
@@ -87,6 +88,16 @@ func (s *Server) handleRealtime(
 			log.Printf("configure input: %v", err)
 			return
 		}
+		if err := session.ConfigureInterruption(s.backchannelProvider, s.interruptionConfig); err != nil {
+			log.Printf("configure interruption: %v", err)
+			return
+		}
+		if s.speculativeSTT != nil && s.llmProvider != nil {
+			if err := session.ConfigureSpeculation(s.speculativeSTT, s.llmProvider, s.speculationConfig); err != nil {
+				log.Printf("configure speculation: %v", err)
+				return
+			}
+		}
 		inputDone := make(chan struct{})
 		go func() { defer close(inputDone); s.consumeInputUpdates(session, writer) }()
 		defer func() { session.Close(); <-inputDone }()
@@ -102,7 +113,8 @@ func (s *Server) handleRealtime(
 		session.ID(),
 		"",
 		map[string]any{
-			"transport": "websocket",
+			"transport":               "websocket",
+			"interruption_timeout_ms": s.interruptionConfig.DecisionWindow.Milliseconds(),
 		},
 	)
 	if err != nil {
@@ -218,7 +230,10 @@ func (s *Server) processRealtimeEvent(
 		)
 
 	case "generation.cancel":
-		generationID := session.CancelGeneration()
+		generationID := session.CancelGenerationID(event.Generation)
+		if generationID == "" && event.Generation != "" {
+			return nil
+		}
 
 		response, err := realtime.NewEvent(
 			"generation.cancelled",
@@ -253,6 +268,26 @@ func (s *Server) processRealtimeEvent(
 			session,
 			event,
 		)
+	case "interruption.suspected", "playback.paused", "playback.overflow", "interruption.failed":
+		var data realtime.InterruptionRequestData
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			return sendRealtimeError(session.Context(), writer, session.ID(), event.Generation, "invalid_interruption", err.Error())
+		}
+		var err error
+		switch event.Type {
+		case "interruption.suspected":
+			err = session.BeginInterruption(event.Generation, data.InterruptionID)
+		case "playback.paused":
+			err = session.PlaybackPaused(event.Generation, data.InterruptionID, data.PlayedSeconds)
+		case "playback.overflow":
+			session.PlaybackFailed(event.Generation, "", "playback_overflow")
+		case "interruption.failed":
+			session.PlaybackFailed(event.Generation, data.InterruptionID, "client_decision_timeout")
+		}
+		if err != nil {
+			return sendRealtimeError(session.Context(), writer, session.ID(), event.Generation, "invalid_interruption", err.Error())
+		}
+		return nil
 
 	case "input_audio.start":
 		var data realtime.InputAudioFormatData
@@ -322,7 +357,13 @@ func (s *Server) processRealtimeEvent(
 	case "input_audio.speech_start", "input_audio.speech_end", "input_audio.vad_misfire":
 		var err error
 		if event.Type == "input_audio.speech_start" {
-			err = session.SpeechStart()
+			var data realtime.InterruptionRequestData
+			if len(event.Data) > 0 {
+				if err := json.Unmarshal(event.Data, &data); err != nil {
+					return err
+				}
+			}
+			err = session.SpeechStartWithInterruption(event.Generation, data.InterruptionID)
 		} else if event.Type == "input_audio.vad_misfire" {
 			err = session.VADMisfire()
 		} else {
@@ -677,7 +718,7 @@ func (s *Server) handlePlaybackProgress(
 		)
 	}
 
-	if data.PlayedSeconds < 0 {
+	if data.PlayedSeconds < 0 || math.IsNaN(data.PlayedSeconds) || math.IsInf(data.PlayedSeconds, 0) {
 		return fmt.Errorf(
 			"invalid played_seconds: %f",
 			data.PlayedSeconds,
@@ -724,6 +765,12 @@ func (s *Server) runSpeechPipeline(
 	voice string,
 	speed float64,
 ) {
+	completed := false
+	defer func() {
+		if !completed && ctx.Err() == nil {
+			s.cancelFailedGeneration(session, writer, generationID)
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -731,6 +778,16 @@ func (s *Server) runSpeechPipeline(
 
 		case chunk, ok := <-pipeline.Output():
 			if !ok {
+				completed = true
+				if session.MarkGenerationDone(generationID) {
+					event, err := realtime.NewEvent("generation.done", session.ID(), generationID, nil)
+					if err == nil {
+						err = writer.Event(ctx, event)
+					}
+					if err != nil {
+						log.Printf("generation done event: %v", err)
+					}
+				}
 				return
 			}
 
@@ -856,7 +913,7 @@ func (s *Server) synthesizeSpeechChunk(
 				bytesPerFrame,
 		)
 
-	timeline := session.Timeline()
+	timeline := session.TimelineForGeneration(generationID)
 
 	if timeline != nil {
 		timeline.SetFormat(
@@ -936,23 +993,16 @@ func (s *Server) synthesizeSpeechChunk(
 				"speech_sequence": chunk.Sequence,
 				"audio_sequence":  audioSequence,
 				"bytes":           len(audioData),
+				"sample_rate":     pcm.SampleRate,
+				"channels":        pcm.Channels,
+				"bits_per_sample": pcm.Bits,
 			},
 		)
 		if err != nil {
 			return err
 		}
 
-		if err := writer.Event(
-			ctx,
-			delta,
-		); err != nil {
-			return err
-		}
-
-		if err := writer.Binary(
-			ctx,
-			audioData,
-		); err != nil {
+		if err := writer.AudioDelta(ctx, delta, audioData); err != nil {
 			return err
 		}
 
@@ -1130,6 +1180,7 @@ func (s *Server) runLLMGeneration(
 		},
 	)
 	if err != nil {
+		s.cancelFailedGeneration(session, writer, generationID)
 		if errors.Is(err, context.Canceled) {
 			return
 		}
@@ -1146,12 +1197,23 @@ func (s *Server) runLLMGeneration(
 		return
 	}
 
+	s.consumeLLMStream(session, writer, ctx, generationID, pipeline, stream)
+}
+
+func (s *Server) consumeLLMStream(session *realtime.Session, writer *realtimeWriter, ctx context.Context, generationID string, pipeline *speech.Pipeline, stream llm.Stream) {
+	completed := false
+	defer func() {
+		if !completed && ctx.Err() == nil {
+			s.cancelFailedGeneration(session, writer, generationID)
+		}
+	}()
 	defer stream.Close()
 
 	for {
 		delta, err := stream.Recv()
 
 		if errors.Is(err, io.EOF) {
+			completed = true
 			if err := pipeline.Close(); err != nil {
 				if !errors.Is(err, context.Canceled) {
 					log.Printf(

@@ -6,6 +6,11 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
         this.queueOffset = 0;
 
         this.activeGeneration = null;
+        this.paused = false;
+        this.pauseID = null;
+        this.storedFrames = 0;
+        // Float32 mono audio: at 48 kHz this caps retained sample storage at 5.76 MB.
+        this.maxStoredFrames = Math.floor(sampleRate * 30);
 
         this.playedFrames = 0;
         this.lastReportedFrames = 0;
@@ -21,6 +26,12 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
             const message = event.data;
 
             switch (message.type) {
+                case "pause":
+                    this.pause(message.generationId, message.interruptionId);
+                    break;
+                case "resume":
+                    this.resume(message.generationId, message.interruptionId);
+                    break;
                 case "generation":
                     this.setGeneration(
                         message.generationId
@@ -53,6 +64,9 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
 
         this.queue = [];
         this.queueOffset = 0;
+        this.storedFrames = 0;
+        this.paused = false;
+        this.pauseID = null;
 
         this.playedFrames = 0;
         this.lastReportedFrames = 0;
@@ -82,6 +96,13 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
         if (data.length === 0) {
             return;
         }
+        if (this.storedFrames + data.length > this.maxStoredFrames) {
+            const interruptionId = this.pauseID;
+            this.clear(generationId);
+            this.port.postMessage({type: "playback.overflow", generationId, interruptionId});
+            return;
+        }
+        this.storedFrames += data.length;
 
         this.queue.push({
             generationId,
@@ -104,8 +125,29 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
 
         this.queue = [];
         this.queueOffset = 0;
+        this.storedFrames = 0;
+        this.paused = false;
+        this.pauseID = null;
 
         this.activeGeneration = null;
+    }
+
+    pause(generationId, interruptionId) {
+        if (!generationId || generationId !== this.activeGeneration || !interruptionId) return;
+        this.paused = true;
+        this.pauseID = interruptionId;
+        this.reportProgress(true);
+        this.port.postMessage({
+            type: "playback.paused", generationId, interruptionId,
+            playedFrames: this.playedFrames, sampleRate,
+            bufferedFrames: this.storedFrames - this.queueOffset
+        });
+    }
+
+    resume(generationId, interruptionId) {
+        if (!generationId || generationId !== this.activeGeneration || !this.paused || interruptionId !== this.pauseID) return;
+        this.paused = false;
+        this.pauseID = null;
     }
 
     reportProgress(force = false) {
@@ -160,6 +202,7 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
         ) {
             output[channel].fill(0);
         }
+        if (this.paused) return true;
 
         let outputOffset = 0;
         let consumedFrames = 0;
@@ -175,6 +218,7 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
                 item.generationId !==
                 this.activeGeneration
             ) {
+                this.storedFrames -= item.samples.length;
                 this.queue.shift();
                 this.queueOffset = 0;
                 continue;
@@ -226,6 +270,7 @@ class PCMPlayerProcessor extends AudioWorkletProcessor {
                 this.queueOffset >=
                 current.length
             ) {
+                this.storedFrames -= current.length;
                 this.queue.shift();
                 this.queueOffset = 0;
             }

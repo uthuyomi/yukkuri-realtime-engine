@@ -54,3 +54,17 @@ func (w *realtimeWriter) Binary(
 		data,
 	)
 }
+
+// Keep metadata and its PCM indivisible across generations and control events.
+func (w *realtimeWriter) AudioDelta(ctx context.Context, event realtime.Event, pcm []byte) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err = w.conn.Write(ctx, websocket.MessageText, payload); err != nil {
+		return err
+	}
+	return w.conn.Write(ctx, websocket.MessageBinary, pcm)
+}

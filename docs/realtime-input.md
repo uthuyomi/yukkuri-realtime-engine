@@ -1,5 +1,12 @@
 # Realtime Input Runtime
 
+Current pause/cancel separation, backchannel policy and recovery are documented in
+[Interruption Recovery](interruption-recovery.md). The manifest below records the
+previous input-runtime milestone.
+
+Preemptive STT/LLM, commit barriers and resource controls are documented in
+[Speculative Generation](speculative-generation.md).
+
 ## File manifest
 
 Modified:
@@ -44,10 +51,11 @@ Microphone → Silero v5 onFrameProcessed (32 ms, 512 samples)
            → existing LLM / semantic chunker / TTS / playback timeline
 ```
 
-No STT, LLM, TTS provider implementation changed. The playback AudioWorklet is
-unchanged. On speech start, the browser clears local playback and sends
-`generation.cancel` before `input_audio.speech_start`. Detector inference never
-runs on the WebSocket read loop or under the Session mutex.
+STT, LLM and TTS provider implementations remain unchanged. On speech start the
+browser now pauses local playback while retaining its queue. The Session resolves
+backchannel/false-interruption recovery or confirms cancellation within a bounded
+window; see [Interruption Recovery](interruption-recovery.md). Detector inference
+never runs on the WebSocket read loop or under the Session mutex.
 
 ## Provider selection (reviewed 2026-09-24)
 
@@ -200,8 +208,10 @@ python -m http.server 8080 --bind 127.0.0.1 --directory examples/browser
 4. Pause mid-sentence, then continue before the deadline. Check the same turn ID
    resumes speaking, no stale completion appears, and the final transcript covers
    both segments.
-5. Speak while AI audio plays. Confirm playback stops immediately, with a
-   `generation.cancelled` acknowledgement independent of detector latency.
+5. Speak while AI audio plays. Confirm playback pauses immediately. A confirmed
+   interruption produces `generation.cancelled`; a backchannel or VAD misfire
+   produces `interruption.recovered` and resumes unheard PCM. See the recovery
+   document for policy limits and targeted manual tests.
 6. Stop the sidecar and speak. Confirm visible `detector_failed`, then max-delay
    fallback. Restart the sidecar; later turns should recover without engine restart.
 7. Stop Microphone / close the page during pending inference or STT. Confirm capture
@@ -236,6 +246,6 @@ The sidecar serializes native inference and returns 503 when busy. Go cancellati
 aborts the HTTP request promptly; an already-running native ONNX call finishes in
 the sidecar rather than being forcibly interrupted. No inference backlog is kept.
 This is a local service, not an authenticated public endpoint. Throughput pooling,
-real ring buffers, streaming STT, false-interruption recovery and adaptive pause
-statistics remain later work. Endpointing here dynamically chooses between the
+real ring buffers, streaming STT and adaptive pause statistics remain later work.
+False-interruption recovery is now implemented as described in the recovery document. Endpointing here dynamically chooses between the
 configured bounds using actual model decisions; it does not learn per-user delays.

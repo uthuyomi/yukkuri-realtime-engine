@@ -6,12 +6,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
 
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/engine"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/backchannel/multisignal"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/llm/openai"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/stt/whispercpp"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/tts/aquestalk"
@@ -189,6 +191,50 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("Turn detector: %s endpoint=%s min=%s max=%s", turnProvider.Name(), turnURL, endpoint.MinDelay, endpoint.MaxDelay)
+	interruptionConfig := realtime.DefaultInterruptionConfig()
+	if value := os.Getenv("INTERRUPTION_DECISION_WINDOW"); value != "" {
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			log.Fatal(err)
+		}
+		interruptionConfig.DecisionWindow = d
+	}
+	acousticRecovery := true
+	if value := os.Getenv("BACKCHANNEL_ACOUSTIC_RECOVERY"); value != "" {
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			log.Fatal(err)
+		}
+		acousticRecovery = v
+	}
+	if err := server.SetBackchannelProvider(&multisignal.Policy{AllowAcousticRecovery: acousticRecovery}, interruptionConfig); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Interruption policy: multisignal-ja-v1 window=%s acoustic_recovery=%v", interruptionConfig.DecisionWindow, acousticRecovery)
+	speculation := realtime.DefaultSpeculationConfig()
+	if value := os.Getenv("SPECULATION_ENABLED"); value != "" {
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			log.Fatal(err)
+		}
+		speculation.Enabled = v
+	}
+	for key, target := range map[string]*time.Duration{
+		"SPECULATION_TIMEOUT":  &speculation.Timeout,
+		"SPECULATION_COOLDOWN": &speculation.Cooldown,
+	} {
+		if value := os.Getenv(key); value != "" {
+			v, err := time.ParseDuration(value)
+			if err != nil {
+				log.Fatalf("%s: %v", key, err)
+			}
+			*target = v
+		}
+	}
+	if err := server.SetSpeculationConfig(speculation); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Speculation: enabled=%v timeout=%s cooldown=%s STT concurrency=2 transcript_limit=%d delta_limit=%d", speculation.Enabled, speculation.Timeout, speculation.Cooldown, speculation.MaxTranscriptBytes, speculation.MaxDeltaBytes)
 
 	// --------------------------------------------------
 	// Start server

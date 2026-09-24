@@ -5,8 +5,12 @@ const vm = require('node:vm');
 
 function browser() {
     const sent = [];
+	const timers = new Map();
+	let nextTimer = 0;
     const sandbox = {
         console, Float32Array, ArrayBuffer, DataView, Int16Array, Uint8Array, window: {},
+		setTimeout: callback => { const id = ++nextTimer; timers.set(id, callback); return id; },
+		clearTimeout: id => timers.delete(id),
         document: {getElementById: () => ({addEventListener() {}, textContent: ''})},
         WebSocket: class {
             static OPEN = 1;
@@ -17,21 +21,66 @@ function browser() {
     vm.createContext(sandbox);
     const html = fs.readFileSync(__dirname + '/realtime-test.html', 'utf8');
     vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1], sandbox);
-    return {sent, sandbox, run: code => vm.runInContext(code, sandbox)};
+    return {sent, sandbox, timers, run: code => vm.runInContext(code, sandbox)};
 }
 
-test('continuous PCM precedes VAD end, with immediate independent barge-in', () => {
+test('continuous PCM precedes VAD end, with immediate pause without generation cancellation', () => {
     const {sent, run} = browser();
     run('microphoneStarted = true; sendInputFrame(new Float32Array([0.5, -0.5]));');
     assert.ok(sent[0] instanceof ArrayBuffer);
     assert.equal(new DataView(sent[0]).getInt16(2, true), -16384);
-    run(`var cleared = false; playerNode = {port: {postMessage() { cleared = true; }}};
+    run(`var paused = false; playerNode = {port: {postMessage(m) { paused = m.type === "pause"; }}};
         currentGenerationID = 'gen_old'; handleUserSpeechStart();`);
-    assert.equal(run('cleared'), true);
-    assert.deepEqual(sent.slice(1).map(e => e.type), ['generation.cancel', 'input_audio.speech_start']);
+    assert.equal(run('paused'), true);
+    assert.deepEqual(sent.slice(1).map(e => e.type), ['input_audio.speech_start']);
     run('handleUserSpeechEnd(new Float32Array([1, 1]));');
     assert.equal(sent.at(-1).type, 'input_audio.speech_end');
     assert.equal(sent.filter(e => e.type === 'input_audio.commit').length, 0);
+});
+
+test('only matching recovery resumes and generation.done retains paused playback', () => {
+    const {run} = browser();
+    run(`var controls = []; playerNode = {port: {postMessage(m) {controls.push(m);}}};
+        currentGenerationID = 'g1'; pausePlayback('g1');
+        handleEvent({type:'generation.done',generation_id:'g1'});
+        recoverPlayback({generation_id:'old',data:{interruption_id:'pause_1'}});
+        recoverPlayback({generation_id:'g1',data:{interruption_id:'old'}});`);
+    assert.equal(run('controls.length'), 1);
+    assert.equal(run('pendingPause.interruptionId'), 'pause_1');
+    run(`recoverPlayback({generation_id:'g1',data:{interruption_id:'pause_1'}});`);
+    assert.equal(run('controls.at(-1).type'), 'resume');
+    assert.equal(run('pendingPause'), null);
+});
+
+test('new generation and stale cancellation cannot revive or clear the wrong queue', () => {
+    const {run} = browser();
+    run(`var controls = []; playerNode = {port: {postMessage(m) {controls.push(m);}}};
+        currentGenerationID = 'g1'; pausePlayback('g1');
+        handleEvent({type:'generation.created',generation_id:'g2'});
+        handleEvent({type:'interruption.recovered',generation_id:'g1',data:{interruption_id:'pause_1'}});
+        handleEvent({type:'generation.cancelled',generation_id:'g1'});`);
+    assert.equal(run('currentGenerationID'), 'g2');
+    assert.equal(run('controls.at(-1).type'), 'generation');
+});
+
+test('watchdog requests authoritative cancellation instead of pausing forever', () => {
+    const {run, sent, timers} = browser();
+    run(`playerNode = {port: {postMessage() {}}}; currentGenerationID='g1'; pausePlayback('g1');`);
+    [...timers.values()][0]();
+    assert.equal(sent.at(-1).type, 'interruption.failed');
+    assert.equal(sent.at(-1).generation_id, 'g1');
+    assert.equal(run('pendingPause'), null);
+    assert.equal(run('currentGenerationID'), null);
+});
+
+test('main-thread MessagePort backlog has the same bounded audio budget', () => {
+    const {run, sent} = browser();
+    run(`playerNode={port:{postMessage(){}}}; audioContext={sampleRate:16000}; currentGenerationID='g1';
+        postedOutputFrames=30*16000;
+        pendingAudio={generationId:'g1',sample_rate:16000,channels:1,bits_per_sample:16,bytes:2};
+        handleAudioBinary(new ArrayBuffer(2));`);
+    assert.equal(sent.at(-1).type, 'playback.overflow');
+    assert.equal(run('currentGenerationID'), null);
 });
 
 test('startup orders input.start before first microphone frame and stop cleans up', async () => {

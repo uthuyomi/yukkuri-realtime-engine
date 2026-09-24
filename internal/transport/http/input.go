@@ -15,7 +15,18 @@ func (s *Server) consumeInputUpdates(session *realtime.Session, writer *realtime
 		case <-session.Context().Done():
 			return
 		case update := <-session.InputUpdates():
-			event, err := realtime.NewEvent("input_audio.turn", session.ID(), "", update)
+			kind := update.EventType
+			var data any = update
+			if kind == "" {
+				kind = "input_audio.turn"
+			}
+			if update.Interruption != nil {
+				data = update.Interruption
+			}
+			if update.Speculation != nil {
+				data = update.Speculation
+			}
+			event, err := realtime.NewEvent(kind, session.ID(), update.Generation, data)
 			if err == nil {
 				err = writer.Event(session.Context(), event)
 			}
@@ -28,6 +39,12 @@ func (s *Server) consumeInputUpdates(session *realtime.Session, writer *realtime
 				workers.Add(1)
 				go func(u realtime.InputUpdate) {
 					defer workers.Done()
+					if u.SpeculationKey != nil {
+						if p := session.PromoteSpeculation(u.Context, *u.SpeculationKey); p != nil {
+							s.runPromotedInput(session, writer, p)
+							return
+						}
+					}
 					s.transcribeInputAudio(u.Context, session, writer, u.Audio, realtime.InputAudioFormatData{SampleRate: 16000, Channels: 1, Encoding: "pcm_s16le"})
 				}(update)
 			}

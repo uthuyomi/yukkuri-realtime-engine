@@ -40,6 +40,13 @@
 
         let currentGenerationID = null;
         let currentSpeechSequence = null;
+        let pendingAudio = null;
+        let pendingPause = null;
+        let pauseSequence = 0;
+        let pauseWatchdog = null;
+        let interruptionTimeoutMs = 1500;
+        let postedOutputFrames = 0;
+        let renderedOutputFrames = 0;
 
         let inputSampleRate = ENGINE_SAMPLE_RATE;
         let inputChannels = 1;
@@ -120,53 +127,22 @@
 
                 playerNode.port.onmessage = (event) => {
                     const message = event.data;
-
-                    if (
-                        message.type !==
-                        "playback.progress"
-                    ) {
+                    if (ws.readyState !== WebSocket.OPEN || !message.generationId) return;
+                    if (message.type === "playback.overflow") {
+                        ws.send(JSON.stringify({type: "playback.overflow", generation_id: message.generationId,
+                            data: {interruption_id: message.interruptionId || ""}}));
+                        if (message.generationId === currentGenerationID) stopPlayback();
                         return;
                     }
-
-                    if (
-                        !ws ||
-                        ws.readyState !== WebSocket.OPEN
-                    ) {
-                        return;
+                    if (!message.sampleRate || message.playedFrames == null) return;
+                    if (message.generationId === currentGenerationID) {
+                        renderedOutputFrames = Math.max(renderedOutputFrames, message.playedFrames);
                     }
-
-                    if (
-                        !message.generationId ||
-                        !message.sampleRate ||
-                        message.playedFrames == null
-                    ) {
-                        return;
+                    if (message.type === "playback.progress" || message.type === "playback.paused") {
+                        ws.send(JSON.stringify({type: message.type, generation_id: message.generationId,
+                            data: {played_seconds: message.playedFrames / message.sampleRate,
+                                interruption_id: message.interruptionId || ""}}));
                     }
-
-                    const playedSeconds =
-                        message.playedFrames /
-                        message.sampleRate;
-
-                    const progressEvent = {
-                        type: "playback.progress",
-                        generation_id:
-                            message.generationId,
-                        data: {
-                            played_seconds:
-                                playedSeconds
-                        }
-                    };
-
-                    console.log(
-                        "PLAYBACK PROGRESS SEND:",
-                        progressEvent
-                    );
-
-                    ws.send(
-                        JSON.stringify(
-                            progressEvent
-                        )
-                    );
                 };
 
                 playerNode.connect(
@@ -268,10 +244,11 @@
                 }
             );
 
-            // Playback interruption never waits for endpoint inference.
-            if (currentGenerationID) requestBargeIn(currentGenerationID);
-            else sendInputEvent("generation.cancel"); // also cancels pending STT
-            sendInputEvent("input_audio.speech_start");
+            // Pause locally before sending anything to the server. Keep queued PCM.
+            const pause = currentGenerationID ? pausePlayback(currentGenerationID) : null;
+            ws.send(JSON.stringify({type: "input_audio.speech_start",
+                generation_id: pause?.generationId || "",
+                data: {interruption_id: pause?.interruptionId || ""}}));
         }
 
         function handleUserSpeechEnd() {
@@ -288,46 +265,35 @@
             sendInputEvent("input_audio.vad_misfire");
         }
 
-        function requestBargeIn(
-            generationID
-        ) {
-            if (
-                !generationID ||
-                !ws ||
-                ws.readyState !== WebSocket.OPEN
-            ) {
-                return;
-            }
+        function clearPauseWatchdog() {
+            if (pauseWatchdog !== null) clearTimeout(pauseWatchdog);
+            pauseWatchdog = null;
+        }
 
-            console.log(
-                "BARGE-IN:",
-                generationID
-            );
+        function pausePlayback(generationId) {
+            clearPauseWatchdog();
+            const pause = {generationId, interruptionId: `pause_${++pauseSequence}`};
+            pendingPause = pause;
+            if (playerNode) playerNode.port.postMessage({type: "pause", ...pause});
+            // Lost responses or a wedged connection must not retain audio forever.
+            pauseWatchdog = setTimeout(() => {
+                if (pendingPause !== pause) return;
+                if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({
+                    type: "interruption.failed", generation_id: generationId,
+                    data: {interruption_id: pause.interruptionId}
+                }));
+                stopPlayback();
+            }, interruptionTimeoutMs + 1000);
+            return pause;
+        }
 
-            /*
-             * Stop local playback immediately.
-             *
-             * Do not wait for the server round trip.
-             * This is important for interruption latency.
-             */
-            if (playerNode) {
-                playerNode.port.postMessage({
-                    type: "clear",
-                    generationId:
-                        generationID
-                });
-            }
-
-            /*
-             * Cancel server-side generation.
-             */
-            ws.send(
-                JSON.stringify({
-                    type: "generation.cancel",
-                    generation_id:
-                        generationID
-                })
-            );
+        function recoverPlayback(message) {
+            if (!pendingPause || message.generation_id !== currentGenerationID ||
+                message.generation_id !== pendingPause.generationId ||
+                message.data.interruption_id !== pendingPause.interruptionId) return;
+            if (playerNode) playerNode.port.postMessage({type: "resume", ...pendingPause});
+            clearPauseWatchdog();
+            pendingPause = null;
         }
 
         function setVADStatus(
@@ -353,6 +319,18 @@
             );
 
             switch (message.type) {
+                case "session.created":
+                    interruptionTimeoutMs = message.data.interruption_timeout_ms || 1500;
+                    break;
+                case "interruption.recovered":
+                    recoverPlayback(message);
+                    break;
+                case "interruption.confirmed":
+                    if (message.generation_id === currentGenerationID) stopPlayback();
+                    break;
+                case "generation.done":
+                    // Generation completed; queued PCM, including paused PCM, remains playable.
+                    break;
                 case "input_audio.turn":
                     setVADStatus(message.data.state);
                     if (message.data.error) console.error("Turn detector:", message.data.error);
@@ -363,7 +341,11 @@
                     if (message.data.code === "invalid_input_audio") void stopMicrophone();
                     break;
                 case "generation.created":
-                    if (userSpeaking) { requestBargeIn(message.generation_id); break; }
+                    clearPauseWatchdog();
+                    pendingPause = null;
+                    pendingAudio = null;
+                    postedOutputFrames = 0;
+                    renderedOutputFrames = 0;
                     currentGenerationID =
                         message.generation_id;
 
@@ -375,6 +357,11 @@
                         });
                     }
 
+                    if (userSpeaking) {
+                        const pause = pausePlayback(currentGenerationID);
+                        ws.send(JSON.stringify({type: "interruption.suspected", generation_id: currentGenerationID,
+                            data: {interruption_id: pause.interruptionId}}));
+                    }
                     break;
 
                 case "response.audio.chunk.started":
@@ -382,6 +369,7 @@
                     break;
 
                 case "response.audio.delta":
+                    pendingAudio = {generationId: message.generation_id, ...message.data};
                     break;
 
                 case "response.audio.chunk.done":
@@ -389,12 +377,13 @@
                     break;
 
                 case "generation.cancelled":
-                    stopPlayback();
+                    if (message.generation_id === currentGenerationID) stopPlayback();
                     break;
             }
         }
 
         function startAudioChunk(message) {
+            if (message.generation_id !== currentGenerationID) return;
             currentSpeechSequence =
                 message.data.sequence;
 
@@ -418,76 +407,32 @@
         }
 
         function handleAudioBinary(buffer) {
-            if (!playerNode || !audioContext) {
-                console.warn(
-                    "Audio received before Start Audio"
-                );
-
+            const audio = pendingAudio;
+            pendingAudio = null;
+            if (!audio || audio.generationId !== currentGenerationID || !playerNode || !audioContext) return;
+            if (audio.bits_per_sample !== 16 || audio.channels !== 1 ||
+                audio.sample_rate <= 0 || buffer.byteLength !== audio.bytes || buffer.byteLength % 2) {
+                console.error("Invalid output PCM metadata");
                 return;
             }
-
-            if (currentSpeechSequence === null) {
-                console.warn(
-                    "PCM received without active speech chunk"
-                );
-
+            const pcm16 = new Int16Array(buffer);
+            let samples = int16ToFloat32(pcm16);
+            if (audio.sample_rate !== audioContext.sampleRate) {
+                samples = resampleLinear(samples, audio.sample_rate, audioContext.sampleRate);
+            }
+            // Bound the MessagePort backlog as well as the AudioWorklet's own queue.
+            if (postedOutputFrames - renderedOutputFrames + samples.length > audioContext.sampleRate * 30) {
+                ws.send(JSON.stringify({type: "playback.overflow", generation_id: audio.generationId,
+                    data: {interruption_id: pendingPause?.interruptionId || ""}}));
+                stopPlayback();
                 return;
             }
-
-            if (inputBits !== 16) {
-                console.error(
-                    "Unsupported PCM bit depth:",
-                    inputBits
-                );
-
-                return;
-            }
-
-            if (inputChannels !== 1) {
-                console.error(
-                    "Unsupported PCM channel count:",
-                    inputChannels
-                );
-
-                return;
-            }
-
-            const pcm16 =
-                new Int16Array(buffer);
-
-            let samples =
-                int16ToFloat32(pcm16);
-
-            if (
-                inputSampleRate !==
-                audioContext.sampleRate
-            ) {
-                samples = resampleLinear(
-                    samples,
-                    inputSampleRate,
-                    audioContext.sampleRate
-                );
-            }
-
-            playerNode.port.postMessage(
-                {
-                    type: "audio",
-                    generationId:
-                        currentGenerationID,
-                    samples
-                },
-                [samples.buffer]
-            );
-
-            console.log(
-                "PCM:",
-                currentSpeechSequence,
-                buffer.byteLength,
-                "bytes"
-            );
+            postedOutputFrames += samples.length;
+            playerNode.port.postMessage({type: "audio", generationId: audio.generationId, samples}, [samples.buffer]);
         }
 
         function finishAudioChunk(message) {
+            if (message.generation_id !== currentGenerationID) return;
             console.log(
                 "PCM CHUNK DONE:",
                 message.data.sequence,
@@ -576,6 +521,11 @@
         }
 
         function stopPlayback() {
+            clearPauseWatchdog();
+            pendingPause = null;
+            pendingAudio = null;
+            postedOutputFrames = 0;
+            renderedOutputFrames = 0;
             const cancelledGeneration =
                 currentGenerationID;
 

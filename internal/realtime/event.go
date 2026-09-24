@@ -54,6 +54,11 @@ type PlaybackProgressData struct {
 	PlayedSeconds float64 `json:"played_seconds"`
 }
 
+type InterruptionRequestData struct {
+	InterruptionID string  `json:"interruption_id"`
+	PlayedSeconds  float64 `json:"played_seconds,omitempty"`
+}
+
 type InputAudioCommitData struct {
 	SampleRate int `json:"sample_rate"`
 	Channels   int `json:"channels"`
