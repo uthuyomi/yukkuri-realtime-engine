@@ -4,10 +4,22 @@ from typing import Any, Literal, NotRequired, Required, TypedDict
 PROTOCOL_VERSION = "1"
 
 
+class TranscriptionRuntime(TypedDict):
+    backend: str
+    requested_device: str
+    selected_device: NotRequired[str]
+    model: str
+    persistent: bool
+    state: str
+    fallback_from: NotRequired[str]
+    fallback_reason: NotRequired[str]
+
+
 class Capability(TypedDict):
     version: str
     available: bool
     modes: NotRequired[list[str]]
+    runtime: NotRequired[TranscriptionRuntime]
 
 
 class Capabilities(TypedDict):

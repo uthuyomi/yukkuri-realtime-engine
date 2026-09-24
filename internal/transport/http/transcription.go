@@ -32,6 +32,15 @@ func (s *Server) transcribe(ctx context.Context, pcm []byte, format protocol.Inp
 		return nil, context.Canceled
 	}
 	if err != nil || result == nil {
+		if errors.Is(err, stt.ErrUnavailable) {
+			return nil, protocol.Error("provider_unavailable")
+		}
+		if errors.Is(err, stt.ErrCapacity) {
+			return nil, protocol.Error("resource_limit")
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, protocol.Error("timeout")
+		}
 		return nil, protocol.Error("transcription_failed")
 	}
 	if len(result.Text) > protocol.MaxTranscriptBytes {

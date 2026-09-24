@@ -55,3 +55,21 @@ func TestSharedAdmissionCancellationAndNoSpeculativeQueue(t *testing.T) {
 		t.Fatal("process budget or cleanup failed")
 	}
 }
+
+func TestAdmissionQueueIsBounded(t *testing.T) {
+	raw := &blockingSTT{entered: make(chan struct{}, 1)}
+	p := New(raw, 1)
+	// Fill the bounded queue without scheduling dozens of blocked goroutines.
+	for range cap(p.queue) {
+		p.queue <- struct{}{}
+	}
+	if _, err := p.Transcribe(context.Background(), stt.Request{}); !errors.Is(err, stt.ErrCapacity) {
+		t.Fatal(err)
+	}
+	if _, err := p.TryTranscribe(context.Background(), stt.Request{}); !errors.Is(err, ErrBusy) {
+		t.Fatal(err)
+	}
+	if raw.active.Load() != 0 {
+		t.Fatal("admission started inference")
+	}
+}

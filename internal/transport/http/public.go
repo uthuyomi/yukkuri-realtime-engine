@@ -13,24 +13,34 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/uthuyomi/yukkuri-realtime-engine/internal/protocol"
+	"github.com/uthuyomi/yukkuri-realtime-engine/internal/providers/stt"
 )
 
 func (s *Server) capabilities() protocol.Capabilities {
+	info := stt.Describe(s.sttProvider)
+	concurrency := info.Concurrency
+	if concurrency < 1 {
+		concurrency = protocol.MaxSTT
+	}
 	feature := func(ok bool, modes ...string) protocol.Capability {
 		return protocol.Capability{Version: "1", Available: ok, Modes: modes}
+	}
+	transcription := feature(info.Available, "commit", "final-only")
+	if info.Backend != "" {
+		transcription.Runtime = &protocol.TranscriptionRuntime{Backend: info.Backend, RequestedDevice: info.RequestedDevice, SelectedDevice: info.SelectedDevice, Model: info.Model, Persistent: info.Persistent, State: info.State, FallbackFrom: info.FallbackFrom, FallbackReason: info.FallbackReason}
 	}
 	return protocol.Capabilities{ProtocolVersion: protocol.Version,
 		Endpoints: map[string]string{"health": "GET /health", "speech": "POST /v1/audio/speech", "realtime": "WS /v1/realtime", "transcription": "WS /v1/transcription", "capabilities": "GET /v1/capabilities"},
 		Features: map[string]protocol.Capability{
-			"tts": feature(s.engine.HasTTS("")), "transcription": feature(s.sttProvider != nil, "commit", "final-only"),
+			"tts": feature(s.engine.HasTTS("")), "transcription": transcription,
 			"conversation": feature(s.llmProvider != nil, "text", "audio-if-tts"), "realtime_audio": feature(s.engine.HasTTS("")),
-			"realtime_input": feature(s.turnProvider != nil && s.sttProvider != nil),
+			"realtime_input": feature(s.turnProvider != nil && info.Available),
 			"interruption":   feature(s.turnProvider != nil), "backchannel": feature(s.turnProvider != nil && s.backchannelProvider != nil),
-			"speculation":        feature(s.turnProvider != nil && s.sttProvider != nil && s.llmProvider != nil && s.speculationConfig.Enabled),
+			"speculation":        feature(s.turnProvider != nil && info.Available && s.llmProvider != nil && s.speculationConfig.Enabled),
 			"audio_flow_control": {Version: "credit-v1", Available: true, Modes: []string{"credit-v1", "legacy-bounded"}},
 		}, InputFormats: []protocol.AudioFormat{{Encoding: "pcm_s16le", SampleRate: 16000, Channels: 1}},
 		OutputFormats: []protocol.AudioFormat{{Encoding: "pcm_s16le", Channels: 1}, {Encoding: "wav", Channels: 1}},
-		Limits:        map[string]int64{"json_bytes": protocol.MaxJSONBytes, "input_binary_bytes": protocol.MaxBinaryBytes, "output_binary_bytes": protocol.MaxOutputBinaryBytes, "http_body_bytes": protocol.MaxHTTPBytes, "text_bytes": protocol.MaxTextBytes, "transcript_bytes": protocol.MaxTranscriptBytes, "legacy_turn_seconds": protocol.MaxTurnSeconds, "realtime_turn_ms": s.endpointConfig.MaxTurnDuration.Milliseconds(), "conversation_items": int64(s.conversationConfig.MaxItems), "conversation_bytes": int64(s.conversationConfig.MaxBytes), "conversation_item_bytes": int64(s.conversationConfig.MaxItemBytes), "audio_queue_ms": 30000, "legacy_audio_window_ms": 2000, "concurrent_stt": protocol.MaxSTT, "sessions": protocol.MaxSessions, "speculation_transcript_bytes": int64(s.speculationConfig.MaxTranscriptBytes), "speculation_delta_bytes": int64(s.speculationConfig.MaxDeltaBytes), "speculation_attempts_per_turn": int64(s.speculationConfig.MaxAttemptsPerTurn), "speculation_timeout_ms": s.speculationConfig.Timeout.Milliseconds(), "provider_timeout_ms": protocol.ProviderTimeout.Milliseconds(), "write_timeout_ms": protocol.WriteTimeout.Milliseconds(), "cleanup_timeout_ms": protocol.CleanupTimeout.Milliseconds(), "credit_wait_timeout_ms": 30000},
+		Limits:        map[string]int64{"json_bytes": protocol.MaxJSONBytes, "input_binary_bytes": protocol.MaxBinaryBytes, "output_binary_bytes": protocol.MaxOutputBinaryBytes, "http_body_bytes": protocol.MaxHTTPBytes, "text_bytes": protocol.MaxTextBytes, "transcript_bytes": protocol.MaxTranscriptBytes, "legacy_turn_seconds": protocol.MaxTurnSeconds, "realtime_turn_ms": s.endpointConfig.MaxTurnDuration.Milliseconds(), "conversation_items": int64(s.conversationConfig.MaxItems), "conversation_bytes": int64(s.conversationConfig.MaxBytes), "conversation_item_bytes": int64(s.conversationConfig.MaxItemBytes), "audio_queue_ms": 30000, "legacy_audio_window_ms": 2000, "concurrent_stt": int64(concurrency), "stt_admitted_requests": int64(info.QueueCapacity), "sessions": protocol.MaxSessions, "speculation_transcript_bytes": int64(s.speculationConfig.MaxTranscriptBytes), "speculation_delta_bytes": int64(s.speculationConfig.MaxDeltaBytes), "speculation_attempts_per_turn": int64(s.speculationConfig.MaxAttemptsPerTurn), "speculation_timeout_ms": s.speculationConfig.Timeout.Milliseconds(), "provider_timeout_ms": protocol.ProviderTimeout.Milliseconds(), "write_timeout_ms": protocol.WriteTimeout.Milliseconds(), "cleanup_timeout_ms": protocol.CleanupTimeout.Milliseconds(), "credit_wait_timeout_ms": 30000},
 	}
 }
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {

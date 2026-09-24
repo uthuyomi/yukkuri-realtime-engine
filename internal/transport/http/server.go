@@ -108,7 +108,11 @@ func (s *Server) SetSTTProvider(
 		return
 	}
 	// One shared process budget for legacy, committed and speculative requests.
-	s.speculativeSTT = limited.New(provider, protocol.MaxSTT)
+	concurrency := protocol.MaxSTT
+	if n := stt.Describe(provider).Concurrency; n > 0 && n < concurrency {
+		concurrency = n
+	}
+	s.speculativeSTT = limited.New(provider, concurrency)
 	s.sttProvider = s.speculativeSTT
 }
 

@@ -30,6 +30,8 @@ func main() {
 	}
 
 	log.Println("Yukkuri Realtime Engine starting...")
+	engineContext, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 
 	e := engine.New()
 
@@ -80,26 +82,23 @@ func main() {
 	// STT: whisper.cpp
 	// --------------------------------------------------
 
-	whisper, err := whispercpp.New(
-		whispercpp.Config{
-			Executable: filepath.Join(
-				"runtime",
-				"whisper",
-				"whisper-cli.exe",
-			),
-			Model: filepath.Join(
-				"runtime",
-				"whisper",
-				"models",
-				"ggml-small.bin",
-			),
-			Language: "ja",
-		},
-	)
-	if err != nil {
-		log.Printf("STT unavailable: %v", err)
+	sttConfig, sttConfigErr := whispercpp.RuntimeConfigFromEnv(os.Getenv)
+	var whisper *whispercpp.Runtime
+	if sttConfigErr != nil {
+		log.Println("STT unavailable: invalid runtime configuration")
 	} else {
-		log.Println("STT configured")
+		whisper, err = whispercpp.NewRuntime(engineContext, sttConfig)
+		if whisper != nil {
+			defer whisper.Close()
+			info := whisper.RuntimeInfo()
+			log.Printf("STT runtime=%s requested_device=%s selected_device=%s model=%s persistent=%v available=%v fallback_from=%s fallback_reason=%s", info.Backend, info.RequestedDevice, info.SelectedDevice, info.Model, info.Persistent, info.Available, info.FallbackFrom, info.FallbackReason)
+		}
+		if err != nil {
+			log.Println("STT unavailable: initialization failed")
+		}
+	}
+	if engineContext.Err() != nil {
+		return
 	}
 
 	// --------------------------------------------------
@@ -218,7 +217,7 @@ func main() {
 	if err := server.SetSpeculationConfig(speculation); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("Speculation: enabled=%v timeout=%s cooldown=%s STT concurrency=2 transcript_limit=%d delta_limit=%d", speculation.Enabled, speculation.Timeout, speculation.Cooldown, speculation.MaxTranscriptBytes, speculation.MaxDeltaBytes)
+	log.Printf("Speculation: enabled=%v timeout=%s cooldown=%s transcript_limit=%d delta_limit=%d", speculation.Enabled, speculation.Timeout, speculation.Cooldown, speculation.MaxTranscriptBytes, speculation.MaxDeltaBytes)
 
 	// --------------------------------------------------
 	// Start server
@@ -232,26 +231,12 @@ func main() {
 		}
 	}()
 
-	signalCh := make(chan os.Signal, 1)
-
-	signal.Notify(
-		signalCh,
-		os.Interrupt,
-		syscall.SIGTERM,
-	)
-
 	select {
-	case sig := <-signalCh:
-		log.Printf(
-			"received signal: %s",
-			sig,
-		)
+	case <-engineContext.Done():
+		log.Println("shutdown requested")
 
 	case err := <-errCh:
-		log.Fatalf(
-			"HTTP server failed: %v",
-			err,
-		)
+		log.Printf("HTTP server failed: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(

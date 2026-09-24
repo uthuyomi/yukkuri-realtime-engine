@@ -1,6 +1,6 @@
 # WS /v1/transcription
 
-Transcription-only connection: no Conversation Runtime, assistant items, LLM, TTS, playback or speculative generation is created. It shares the STT provider and two-process admission budget with realtime conversation. Current whisper.cpp mode is **final-only, process-per-utterance**; no partial transcript or streaming Whisper is implied.
+Transcription-only connection: no Conversation Runtime, assistant items, LLM, TTS, playback or speculative generation is created. It shares the STT provider and bounded admission with realtime conversation. Default whisper.cpp mode is **final-only, persistent**, with one serialized inference context. Read `limits.concurrent_stt` and `limits.stt_admitted_requests`; generic providers can retain the previous two-inference limit. No partial transcript or streaming Whisper is implied. See [STT runtime/device configuration](stt-runtime.md).
 
 ## Wire flow
 

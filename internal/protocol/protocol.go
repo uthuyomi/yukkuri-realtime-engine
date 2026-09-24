@@ -148,9 +148,22 @@ func ValidateInput(rate, channels int, encoding string) error {
 }
 
 type Capability struct {
-	Version   string   `json:"version"`
-	Available bool     `json:"available"`
-	Modes     []string `json:"modes,omitempty"`
+	Version   string                `json:"version"`
+	Available bool                  `json:"available"`
+	Modes     []string              `json:"modes,omitempty"`
+	Runtime   *TranscriptionRuntime `json:"runtime,omitempty"`
+}
+
+// Optional v1 discovery metadata. No local paths or device identity on the wire.
+type TranscriptionRuntime struct {
+	Backend         string `json:"backend"`
+	RequestedDevice string `json:"requested_device"`
+	SelectedDevice  string `json:"selected_device,omitempty"`
+	Model           string `json:"model"`
+	Persistent      bool   `json:"persistent"`
+	State           string `json:"state"`
+	FallbackFrom    string `json:"fallback_from,omitempty"`
+	FallbackReason  string `json:"fallback_reason,omitempty"`
 }
 type Capabilities struct {
 	ProtocolVersion string                `json:"protocol_version"`

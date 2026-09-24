@@ -39,7 +39,7 @@ The response includes `protocol_version: "1"`, an `endpoints` map, `features`, `
 }
 ```
 
-Other feature keys: `tts`, `conversation`, `realtime_audio`, `realtime_input`, `interruption`, `backchannel`, `speculation`. Conversation availability requires configured LLM; audio conversation also requires TTS. Realtime input requires STT and a turn detector. Transcription-only requires only STT. Provider class/name, keys, model names/paths, prompts and filesystem locations are not returned.
+Other feature keys: `tts`, `conversation`, `realtime_audio`, `realtime_input`, `interruption`, `backchannel`, `speculation`. Conversation availability requires configured LLM; audio conversation also requires TTS. Realtime input requires STT and a turn detector. Transcription-only requires only STT. The optional `transcription.runtime` metadata exposes safe backend (`whisper.cpp`), requested/selected device, model identifier (`small` or `custom` etc.), persistent mode, state and fallback category. Keys, model paths, GPU identity, prompts, raw provider errors and filesystem locations are not returned. See [STT runtime](stt-runtime.md).
 
 Each feature's version describes that feature's wire semantics. `session.configure` validates protocol version and optionally selects audio flow control. Optional features do not require the client to handle extra events; ignore unknown server events/fields. STT speculation remains a transparent server optimization and never creates public precommit PCM.
 
@@ -62,7 +62,8 @@ Numbers below are defaults; discover configured conversation/endpoint/speculatio
 | Conversation | 50 items, 256KiB store, 32KiB/item; context 20 items / 48KiB, 1024 audio chunks |
 | Worklet PCM | 30 seconds hard capacity, separate fixed 4096 metadata descriptors |
 | Audio send window | Recommended credit-v1; legacy 2 seconds, replenished by playback ACK |
-| Concurrent STT | 2 per server, shared by realtime, transcription and speculation |
+| Concurrent STT | `limits.concurrent_stt`: 1 for persistent whisper.cpp; up to 2 for generic providers, shared by realtime, transcription and speculation |
+| STT admission | `limits.stt_admitted_requests`: default 8 including active request for whisper runtime; overflow returns resource_limit. Speculation never queues |
 | WS connections | 64 per server |
 | Transport workers | 16 per socket, including update consumers and generation workers |
 | Speculation | 1 active worker/session, 3 attempts/turn, 2s cooldown, 45s lifetime, 16KiB transcript, 64KiB/1024 deltas |

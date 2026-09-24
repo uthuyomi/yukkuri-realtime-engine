@@ -1,6 +1,10 @@
 export const PROTOCOL_VERSION = '1' as const;
 export interface AudioFormat { encoding: string; sample_rate?: number; channels: number }
-export interface Capability { version: string; available: boolean; modes?: string[] }
+export interface TranscriptionRuntime {
+  backend: string; requested_device: string; selected_device?: string; model: string;
+  persistent: boolean; state: string; fallback_from?: string; fallback_reason?: string;
+}
+export interface Capability { version: string; available: boolean; modes?: string[]; runtime?: TranscriptionRuntime }
 export interface Capabilities {
   protocol_version: string; features: Record<string, Capability>; endpoints: Record<string, string>;
   input_audio_formats: AudioFormat[]; output_audio_formats: AudioFormat[]; limits: Record<string, number>;

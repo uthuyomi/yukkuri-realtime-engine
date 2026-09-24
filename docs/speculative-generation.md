@@ -153,7 +153,7 @@ max delay、duplicate speech_end、遅い detector の epoch 保護は維持す�
 | Session の speculative worker | 最大 1。キャンセル後の終了待ちを含む |
 | 同一 turn の speculative 起動 | 最大 3 回、revision ごとに最大 1 回 |
 | 起動間隔 | 2 秒。新ターンでも間隔を守る |
-| STT 同時実行 | Server 全体で 2。通常・legacy・先行処理が同じ枠を共有 |
+| STT 同時実行 | 通常・legacy・先行処理で共有。STT Runtime Finishing以降はwhisper.cppで1、generic providerは最大2。capabilitiesのconcurrent_sttが実効値 |
 | 空き STT 枠なし | speculative は待機せず fallback。通常処理は context 付き待機 |
 | 先行処理の寿命 | 開始から 45 秒。promotion 後は通常 generation の寿命へ移管 |
 | transcript | UTF-8 text 16 KiB |
@@ -216,10 +216,10 @@ CPU 負荷、起動回数、先行仕事の採用率、wasted_ms、最初の PCM
 
 ## 19. 現 Whisper の限界
 
-process-per-utterance、モデル再ロード、final only、non-streaming はそのまま。
+STT Runtime Finishing以降は既定でpersistent modelとなり、CPU/CUDA device selectionを追加した。[STT runtime](stt-runtime.md)参照。final only / non-streamingは維持する。cancel/crash後は安全のためworkerを回収し、次回reloadする。
 通常は Smart Turn inference と重なる時間が短く、Whisper が遅い場合、commit 前の LLM 先行まで到達しない。
 45 秒を超える認識では通常 path への再試行がむしろ latency を増やす可能性がある。
-CUDA、persistent model、native binding、Partial/Streaming STT は追加していない。
+native binding、Partial/Streaming STTは未導入。今回の常駐化でも既存commit barrierとrevision invalidationを維持する。
 
 ## 20. 将来の Streaming STT
 

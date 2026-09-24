@@ -14,6 +14,10 @@ import (
 // The test binary acts as a long-running whisper-cli child, exercising the
 // provider's real exec.CommandContext/Run path without loading a model.
 func TestMain(m *testing.M) {
+	if os.Getenv("YUKKURI_TEST_STT_SERVER") != "" {
+		runTestServer()
+		os.Exit(0)
+	}
 	if marker := os.Getenv("YUKKURI_TEST_WHISPER_CHILD"); marker != "" {
 		for i, arg := range os.Args {
 			if arg == "-f" && i+1 < len(os.Args) {

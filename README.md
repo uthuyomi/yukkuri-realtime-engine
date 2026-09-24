@@ -2,6 +2,8 @@
 
 Self-hosted voice engine with AquesTalk output, whisper.cpp transcription and realtime conversation. Public protocol version: **1**.
 
+STT now uses a persistent whisper.cpp runtime. See [CPU setup, CUDA/GTX1660 setup and `STT_DEVICE=auto|cpu|cuda`](docs/stt-runtime.md), [reproducible benchmarks and measured results](docs/stt-performance.md), and [STT Runtime implementation report](docs/stt-runtime-finishing.md). Default model remains small; device selection never changes it. CUDA hardware measurements are still pending.
+
 ## Quick start: Engine → SDK / CLI
 
 Start the configured Engine in one terminal:
