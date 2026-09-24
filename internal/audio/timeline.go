@@ -8,7 +8,8 @@ import (
 // PlaybackSnapshot is an immutable snapshot of the playback state
 // for a single generation.
 //
-// All audio positions are represented as audio frames.
+// All audio positions use source PCM frames and source SampleRate, never
+// AudioContext/output frames (resampling must not change this axis).
 //
 // One frame represents one point in time across all channels:
 //
@@ -131,8 +132,8 @@ func (t *PlaybackTimeline) AddSent(
 // Playback progress is monotonic. An older or delayed progress
 // report must never move the timeline backwards.
 //
-// PlayedFrames is also clamped to SentFrames when sent progress
-// is known, because the client cannot legitimately play audio
+// PlayedFrames is also clamped to SentFrames (including zero),
+// because the client cannot legitimately play audio
 // that has not been sent.
 func (t *PlaybackTimeline) SetPlayed(
 	frames int64,
@@ -144,8 +145,7 @@ func (t *PlaybackTimeline) SetPlayed(
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.sentFrames > 0 &&
-		frames > t.sentFrames {
+	if frames > t.sentFrames {
 		frames = t.sentFrames
 	}
 

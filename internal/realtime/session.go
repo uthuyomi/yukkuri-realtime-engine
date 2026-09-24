@@ -22,11 +22,13 @@ type Session struct {
 
 	mu sync.Mutex
 
-	generationID     string
-	generationCtx    context.Context
-	generationCancel context.CancelFunc
-	pipeline         *speech.Pipeline
-	timeline         *audio.PlaybackTimeline
+	generationID        string
+	generationCtx       context.Context
+	generationCancel    context.CancelFunc
+	pipeline            *speech.Pipeline
+	timeline            *audio.PlaybackTimeline
+	audioFlow           *audio.FlowController
+	audioCreditRequired bool
 
 	inputAudioFormat    InputAudioFormatData
 	inputAudioBuffer    bytes.Buffer
@@ -143,6 +145,7 @@ func (s *Session) startGenerationWithTurnLocked(turn string, textOnly bool) (str
 	s.generationCancel = cancel
 	s.pipeline = pipeline
 	s.timeline = timeline
+	s.audioFlow = nil
 	s.generationTextOnly = textOnly
 	s.generationRequest = llm.Request{}
 	if textOnly {

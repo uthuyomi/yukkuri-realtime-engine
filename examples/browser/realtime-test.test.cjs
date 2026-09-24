@@ -45,7 +45,8 @@ test('only matching recovery resumes and generation.done retains paused playback
         handleEvent({type:'generation.done',generation_id:'g1'});
         recoverPlayback({generation_id:'old',data:{interruption_id:'pause_1'}});
         recoverPlayback({generation_id:'g1',data:{interruption_id:'old'}});`);
-    assert.equal(run('controls.length'), 1);
+    assert.equal(run('controls.length'), 2);
+    assert.equal(run('controls.at(-1).type'), 'done');
     assert.equal(run('pendingPause.interruptionId'), 'pause_1');
     run(`recoverPlayback({generation_id:'g1',data:{interruption_id:'pause_1'}});`);
     assert.equal(run('controls.at(-1).type'), 'resume');
@@ -76,7 +77,7 @@ test('watchdog requests authoritative cancellation instead of pausing forever', 
 test('main-thread MessagePort backlog has the same bounded audio budget', () => {
     const {run, sent} = browser();
     run(`playerNode={port:{postMessage(){}}}; audioContext={sampleRate:16000}; currentGenerationID='g1';
-        postedOutputFrames=30*16000;
+        postedSourceFrames=30*16000;
         pendingAudio={generationId:'g1',sample_rate:16000,channels:1,bits_per_sample:16,bytes:2};
         handleAudioBinary(new ArrayBuffer(2));`);
     assert.equal(sent.at(-1).type, 'playback.overflow');
@@ -120,5 +121,58 @@ test('resampled audio retains native frame counts for history acknowledgements',
         pendingAudio={generationId:'g1',sample_rate:8000,channels:1,bits_per_sample:16,bytes:6};
         handleAudioBinary(new ArrayBuffer(6));`);
     assert.equal(run('posted.at(-1).sourceFrames'), 3);
-    assert.equal(run('posted.at(-1).samples.length'), 17);
+    assert.equal(run('posted.at(-1).samples.length'), 3);
+    assert.equal(run('posted.at(-1).sourceRate'), 8000);
+});
+
+
+test('negotiated runtime grants initial credit from format and exact source credit after drain', () => {
+    const {sent, run, sandbox} = browser();
+    let Player;
+    sandbox.sampleRate = 44100;
+    sandbox.AudioWorkletProcessor = class {constructor() {this.port = {postMessage: m => sandbox.handlePlaybackMessage(m)};}};
+    sandbox.registerProcessor = (_name, type) => {Player = type;};
+    vm.runInContext(fs.readFileSync(__dirname + '/audio-worklet.js', 'utf8'), sandbox);
+    const p = new Player();
+    sandbox.testPort = {postMessage: m => p.port.onmessage({data:m})};
+    run(`playerNode={port:testPort}; audioContext={sampleRate:44100};
+        handleEvent({type:'session.created',data:{audio_flow_control:'credit-v1'}});
+        handleEvent({type:'generation.created',generation_id:'g'});
+        handleEvent({type:'response.audio.chunk.started',generation_id:'g',data:{sequence:0,sample_rate:8000,channels:1,bits_per_sample:16}});`);
+    assert.equal(sent[0].type, 'playback.configure');
+    assert.equal(sent.at(-1).type, 'playback.credit');
+    assert.equal(sent.at(-1).data.received_source_frames, 0);
+    assert.equal(sent.at(-1).data.capacity_source_frames, 16000);
+    run(`handleEvent({type:'response.audio.delta',generation_id:'g',data:{speech_sequence:0,audio_sequence:0,source_start_frame:0,source_frames:3,sample_rate:8000,channels:1,bits_per_sample:16,bytes:6}});
+        handleAudioBinary(new ArrayBuffer(6));
+        handleEvent({type:'generation.done',generation_id:'g',data:{source_frames:3}});`);
+    p.process([], [[new Float32Array(128)]]);
+    assert.equal(p.completed, true);
+    assert.equal(p.playedFrames, 17);
+    const credit = sent.filter(e => e.type === 'playback.credit').at(-1);
+    assert.equal(credit.data.played_source_frames, 3);
+    assert.equal(credit.data.buffered_source_frames, 0);
+    assert.equal(sent.filter(e => e.type === 'playback.progress').at(-1).data.played_source_frames, 3);
+    const count = sent.length;
+    run(`handlePlaybackMessage({type:'playback.credit',generationId:'old',sampleRate:44100,playedFrames:1,sourceRate:8000,capacitySourceFrames:16000});`);
+    assert.equal(sent.length, count);
+});
+
+test('legacy server receives progress without unknown credit extensions', () => {
+    const {sent, run} = browser();
+    run(`handleEvent({type:'session.created',data:{}}); currentGenerationID='g';
+        handlePlaybackMessage({type:'playback.progress',generationId:'g',sampleRate:48000,playedFrames:48000,
+            sourceRate:8000,playedSourceFrames:8000,receivedSourceFrames:8000,bufferedSourceFrames:0,capacitySourceFrames:16000});`);
+    assert.deepEqual(sent.map(m => m.type), ['playback.progress']);
+    assert.equal(sent[0].data.played_source_frames, 8000);
+});
+
+test('overflow acknowledges rendered source prefix before authoritative cancellation', () => {
+    const {sent, run} = browser();
+    run(`currentGenerationID='g'; playerNode={port:{postMessage(){}}};
+        handlePlaybackMessage({type:'playback.overflow',generationId:'g',sampleRate:48000,playedFrames:600,
+            sourceRate:8000,playedSourceFrames:100,interruptionId:'p'});`);
+    assert.deepEqual(sent.map(m => m.type), ['playback.progress', 'playback.overflow']);
+    assert.equal(sent[0].data.played_source_frames, 100);
+    assert.equal(run('currentGenerationID'), null);
 });

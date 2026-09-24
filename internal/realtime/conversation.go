@@ -216,6 +216,7 @@ func (s *Session) RecordAudioSent(id string, frames int64) {
 		return
 	}
 	s.timeline.AddSent(frames)
+	s.reconcileAudioPlaybackLocked()
 	s.syncConversationPlaybackLocked()
 }
 func (s *Session) RecordPlayback(id string, seconds float64, source ...*int64) error {
@@ -240,6 +241,9 @@ func (s *Session) recordSourcePlaybackLocked(frames int64) error {
 	if s.timeline == nil {
 		return nil
 	}
+	if s.audioFlow != nil {
+		s.audioFlow.Acknowledge(frames)
+	}
 	snap := s.timeline.Snapshot()
 	if frames > snap.SentFrames {
 		frames = snap.SentFrames
@@ -257,6 +261,11 @@ func (s *Session) recordPlaybackLocked(seconds float64) {
 		return
 	}
 	frames := seconds * float64(snap.SampleRate)
+	if s.audioFlow != nil {
+		// Retain a legitimate ACK racing the successful-write accounting; the
+		// reservation ceiling also keeps a huge seconds value safe to convert.
+		s.audioFlow.Acknowledge(int64(min(frames, float64(s.audioFlow.Snapshot().Reserved))))
+	}
 	if frames > float64(snap.SentFrames) {
 		frames = float64(snap.SentFrames)
 	}

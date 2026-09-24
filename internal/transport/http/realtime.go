@@ -117,6 +117,8 @@ func (s *Server) handleRealtime(
 		"",
 		map[string]any{
 			"transport":               "websocket",
+			"audio_flow_control":      "credit-v1",
+			"legacy_audio_window_ms":  2000,
 			"conversation_id":         session.ConversationID(),
 			"interruption_timeout_ms": s.interruptionConfig.DecisionWindow.Milliseconds(),
 		},
@@ -214,6 +216,23 @@ func (s *Server) processRealtimeEvent(
 		event.Generation,
 	)
 	switch event.Type {
+	case "playback.configure":
+		var data struct {
+			FlowControl string `json:"flow_control"`
+		}
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			return err
+		}
+		if data.FlowControl != "credit-v1" {
+			return fmt.Errorf("unsupported audio flow control")
+		}
+		return session.RequireAudioCredit()
+	case "playback.credit":
+		var credit audio.Credit
+		if err := json.Unmarshal(event.Data, &credit); err != nil {
+			return err
+		}
+		return session.UpdateAudioCredit(event.Generation, credit)
 	case "ping":
 		response, err := realtime.NewEvent(
 			"pong",
@@ -691,7 +710,11 @@ func (s *Server) handleTextDelta(
 	if session.GenerationTextOnly(id) {
 		return nil
 	}
-	return pipeline.Push(data.Text)
+	if err := pipeline.TryPush(data.Text); err != nil {
+		s.cancelFailedGeneration(session, writer, id)
+		return sendRealtimeError(session.Context(), writer, session.ID(), id, "text_backpressure", err.Error())
+	}
+	return nil
 }
 
 func (s *Server) handleTextDone(
@@ -716,7 +739,11 @@ func (s *Server) handleTextDone(
 	if session.GenerationTextOnly(id) {
 		return s.finishTextGeneration(session, writer, id)
 	}
-	return pipeline.Close()
+	if err := pipeline.TryClose(); err != nil {
+		s.cancelFailedGeneration(session, writer, id)
+		return sendRealtimeError(session.Context(), writer, session.ID(), id, "text_backpressure", err.Error())
+	}
+	return nil
 }
 
 func (s *Server) handlePlaybackProgress(session *realtime.Session, event realtime.Event) error {
@@ -751,7 +778,12 @@ func (s *Server) runSpeechPipeline(
 			if !ok {
 				completed = true
 				if session.MarkGenerationDone(generationID) {
-					event, err := realtime.NewEvent("generation.done", session.ID(), generationID, nil)
+					var completion any
+					if timeline := session.TimelineForGeneration(generationID); timeline != nil {
+						snap := timeline.Snapshot()
+						completion = map[string]any{"source_frames": snap.SentFrames, "sample_rate": snap.SampleRate}
+					}
+					event, err := realtime.NewEvent("generation.done", session.ID(), generationID, completion)
 					if err == nil {
 						err = writer.Event(ctx, event)
 					}
@@ -830,7 +862,11 @@ func (s *Server) synthesizeSpeechChunk(
 	}
 	defer stream.Audio.Close()
 
-	wavData, err := io.ReadAll(stream.Audio)
+	const maxWAVBytes = 16 * 1024 * 1024
+	wavData, err := io.ReadAll(io.LimitReader(stream.Audio, maxWAVBytes+1))
+	if len(wavData) > maxWAVBytes {
+		return fmt.Errorf("synthesized WAV exceeds audio runtime limit")
+	}
 	if err != nil {
 		return fmt.Errorf(
 			"read synthesized WAV: %w",
@@ -850,6 +886,9 @@ func (s *Server) synthesizeSpeechChunk(
 		)
 	}
 
+	if pcm.Bits != 16 || pcm.Channels != 1 {
+		return fmt.Errorf("audio runtime requires mono PCM16")
+	}
 	bytesPerSample := pcm.Bits / 8
 
 	if bytesPerSample <= 0 {
@@ -889,6 +928,14 @@ func (s *Server) synthesizeSpeechChunk(
 		return err
 	}
 
+	flow, err := session.AudioFlow(generationID, pcm.SampleRate)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		state := flow.Snapshot()
+		log.Printf("audio flow: generation=%s capacity_source_frames=%d reserved_source_frames=%d credit_wait_ms=%d credit_wait_count=%d", generationID, state.Capacity, state.Reserved, state.WaitDuration.Milliseconds(), state.WaitCount)
+	}()
 	started, err := realtime.NewEvent(
 		"response.audio.chunk.started",
 		session.ID(),
@@ -943,8 +990,12 @@ func (s *Server) synthesizeSpeechChunk(
 			)
 		}
 
-		end :=
-			offset + chunkBytes
+		granted, err := flow.Reserve(ctx, int64(chunkBytes/bytesPerFrame))
+		if err != nil {
+			return err
+		}
+		chunkBytes = int(granted) * bytesPerFrame
+		end := offset + chunkBytes
 
 		audioData := pcm.Data[offset:end]
 
@@ -953,12 +1004,14 @@ func (s *Server) synthesizeSpeechChunk(
 			session.ID(),
 			generationID,
 			map[string]any{
-				"speech_sequence": chunk.Sequence,
-				"audio_sequence":  audioSequence,
-				"bytes":           len(audioData),
-				"sample_rate":     pcm.SampleRate,
-				"channels":        pcm.Channels,
-				"bits_per_sample": pcm.Bits,
+				"speech_sequence":    chunk.Sequence,
+				"audio_sequence":     audioSequence,
+				"bytes":              len(audioData),
+				"source_frames":      len(audioData) / bytesPerFrame,
+				"source_start_frame": flow.Snapshot().Reserved - int64(len(audioData)/bytesPerFrame),
+				"sample_rate":        pcm.SampleRate,
+				"channels":           pcm.Channels,
+				"bits_per_sample":    pcm.Bits,
 			},
 		)
 		if err != nil {

@@ -281,3 +281,6 @@ reconnect 復元やユーザー認証を実装済みとはしていない。
 - race detector 未実行と既存 AquesTalk vet 警告が残る。
 
 git commit / git push は実行していない。
+
+
+Audio runtime follow-up: [Audio Runtime Finishing](audio-runtime.md) (ring buffer, streaming resampling, bounded credit flow).
