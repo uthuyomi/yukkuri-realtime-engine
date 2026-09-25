@@ -1,4 +1,7 @@
 * text=auto
+# Generated protocol artifacts are checked byte-for-byte against LF output.
+/docs/protocol/*.schema.json text eol=lf
+/sdk/typescript/src/client-events.ts text eol=lf
 /internal/providers/tts/aquestalk/aqk2k_win export-ignore
 /internal/providers/tts/aquestalk/aqtk1_win export-ignore
 /runtime export-ignore
