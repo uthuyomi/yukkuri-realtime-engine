@@ -1,50 +1,59 @@
 # Yukkuri Realtime Engine
 
+会話AI向けのセルフホスト型リアルタイム音声ランタイムです。STT・LLM・TTSの周囲で、ターン、割り込み、生成、再生の進行を管理し、日本語の音声アプリケーションをサンプルとして提供します。
+
 [English](README.md) | 日本語
 
-日本語の音声アプリケーション向けに、会話と再生の進行を管理するセルフホスト型リアルタイム音声エンジン／ランタイムです。**v0.1.0は初期リリースの目標**で、Public APIは**v1**です。本番運用の成熟度を宣言するものではありません。
+[![Release v0.1.0](https://img.shields.io/badge/release-v0.1.0-blue)](https://github.com/uthuyomi/yukkuri-realtime-engine/releases/tag/v0.1.0)
+[![Quality](https://github.com/uthuyomi/yukkuri-realtime-engine/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/uthuyomi/yukkuri-realtime-engine/actions/workflows/quality.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-## どのようなエンジンか
+**公開リリース：[v0.1.0](https://github.com/uthuyomi/yukkuri-realtime-engine/releases/tag/v0.1.0)** · Public API **v1** · エンジンは **Windows x64** · ローカル開発向けの初期リリースです。
 
-マイク入力、発話終了判定、音声認識、会話コンテキスト、LLMのストリーム応答、音声再生を協調させます。HTTP/WebSocket APIとTypeScript/Python SDKから利用でき、ブラウザのサンプルはクライアントの一例です。
+[起動手順](docs/quickstart.ja.md) · [アーキテクチャ](docs/architecture.ja.md) · [SDK](#sdk) · [ドキュメント](#ドキュメント)
 
-現在の代表的なローカルTTSはAquesTalkです。STT、LLM、TTS、ターン検出、相づち判定は別々のGo provider境界を持ちます。標準の起動プログラムはローカルのwhisper.cppとSmart Turn、設定時には**外部のOpenAI LLMサービス**を利用します。ランタイムをセルフホストしても、この構成全体がローカルになるわけではありません。
+クライアントが実際に再生した内容を会話状態に反映し、発話開始時には応答を一時停止、割り込み判定に応じて復帰またはキャンセルします。HTTP/WebSocket APIとTypeScript/Python SDKから、このセッションのライフサイクルを利用できます。
 
-## 機能
+標準構成はローカルのwhisper.cpp・Smart Turn・AquesTalkと、**外部のOpenAI LLMサービス**を組み合わせます。各providerは別々のGo interfaceを持ちますが、ランタイムのセルフホストは構成全体のローカル動作を意味しません。AQUEST資産・モデル・認証情報は別途用意します。
 
-- クライアントVAD連携、連続PCM入力、サーバーのSmart Turnと動的endpointing。
-- CPU/CUDAを選択できる常駐whisper.cpp。確定文字起こしを返し、逐次partial STTは提供しません。
-- LLMストリーミング、意味単位の音声分割、TTS入力の正規化、PCM配信。
-- generation単位のキャンセル、barge-in、一時停止、誤割り込みからの復帰、ヒューリスティックな相づち処理。
-- 正式なpromotionまで公開しない、上限付きの先行STT/LLM生成。
-- 再生状況を反映した複数ターンの会話履歴と、source frame基準のcredit-v1フロー制御。
-- ブラウザAudioWorkletのリングバッファ／リサンプラー、capability取得、IDで相関できるイベント。
+## デモ
+
+Browser Voiceの実録デモは、所有者が後日追加します。[providerの設定](docs/quickstart.ja.md)後に[ブラウザサンプル](examples/typescript/browser-voice/README.md)を起動できます。
+
+<!-- 所有者が確認したBrowser Voiceの実録デモで置き換えてください。実在するメディアだけをリンクしてください。 -->
+
+## 主な機能
+
+- **リアルタイムの対話：** クライアントVAD、Smart Turnと動的な発話終了判定、barge-in、誤割り込みからの復帰、ヒューリスティックな相づち処理。
+- **生成のライフサイクル：** 上限付きの先行STT/LLM生成、commit判定後のpromotion、generation単位のキャンセル、複数ターンの会話状態。
+- **音声ランタイム：** 意味単位の音声分割、PCM配信、source frame基準のcredit-v1フロー制御、再生状況を反映する履歴、AudioWorkletクライアント。
+- **連携：** HTTP/WebSocket Public API v1、TypeScript SDK、Python SDK/CLI、ブラウザサンプル、session/generation IDで相関できるイベント。
 
 ## アーキテクチャ
 
 ```mermaid
 flowchart TD
-  Mic[クライアントのマイク + VAD] --> Input[サーバーPCM入力 / endpointing]
-  Input <--> Turn[Smart Turnサイドカー]
-  Input --> STT[whisper.cppランタイム]
-  STT --> Conv[会話ランタイム]
-  Conv --> LLM[LLMストリーム]
-  LLM --> Speech[意味単位の分割 / 正規化]
-  Speech --> TTS[TTS provider]
-  TTS --> PCM[PCM / credit / source timeline]
-  PCM --> Player[クライアントWorklet / 再生]
-  Player -->|再生済みsource frames| PCM
-  PCM -->|再生済み履歴| Conv
-  Input -.-> Spec[上限付き先行生成 / commit判定]
-  Spec -.-> Conv
-  Mic -.-> Interrupt[一時停止 / 割り込み / キャンセル]
-  Interrupt -.-> PCM
-  Interrupt -.-> Conv
-  Input -.-> Events[相関イベント / capabilities]
-  PCM -.-> Events
+  Mic["Client microphone + VAD"] --> Input
+  subgraph Runtime["Realtime session runtime"]
+    Input["PCM input / endpointing"] <--> Turn["Smart Turn sidecar"]
+    Input --> STT["whisper.cpp / final STT"]
+    STT --> Conv["Conversation / generation lifecycle"]
+    Conv --> LLM["LLM stream"]
+    LLM --> Speech["Speech chunks / normalization"]
+    Speech --> TTS["TTS provider"]
+    TTS --> PCM["PCM / credit-v1 / playback timeline"]
+    Input -.-> Spec["Speculative STT + LLM buffer"]
+    Spec -.->|commit barrier / promotion| Conv
+    Input -.-> Interrupt["Interruption / backchannel decision"]
+    Interrupt -.->|cancel or recover| Conv
+    Interrupt -.->|pause or resume| PCM
+  end
+  PCM --> Player["Client AudioWorklet / playback"]
+  Player -->|source-frame ACK| PCM
+  PCM -->|played history| Conv
 ```
 
-[詳細 EN](docs/architecture.md) / [日本語](docs/architecture.ja.md)
+実線は主な音声経路と再生状況のフィードバック、点線は並行する先行生成と割り込み制御です。先行生成はpromotion前にtextや音声を公開できません。providerのノードは連携境界を示し、単一プロセスを意味しません。[詳しいアーキテクチャ](docs/architecture.ja.md)。
 
 ## クイックスタート
 
@@ -56,7 +65,7 @@ clone後、provider資産なしでもビルドできます。
 git clone https://github.com/uthuyomi/yukkuri-realtime-engine.git
 cd yukkuri-realtime-engine
 go build -o dist/engine.exe ./cmd/engine
-Copy-Item .env.example .env
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 # 音声会話にはローカルproviderとOPENAI_API_KEYの設定が必要です。
 go run ./cmd/engine
 ```
@@ -151,6 +160,8 @@ python -m yukkuri_realtime realtime
 | Providers | [EN](docs/providers.md) | [JA](docs/providers.ja.md) |
 | 性能 | [EN](docs/performance.md) | [JA](docs/performance.ja.md) |
 | トラブルシューティング | [EN](docs/troubleshooting.md) | [JA](docs/troubleshooting.ja.md) |
+
+[TypeScript SDK](docs/typescript-sdk.md) · [Python SDK](docs/python-sdk.md) · [CLI](docs/cli.md)
 
 [開発・テスト](CONTRIBUTING.md) · [セキュリティ](SECURITY.md) · [変更履歴](CHANGELOG.md) · [リリース準備報告](docs/release-quality.md)
 

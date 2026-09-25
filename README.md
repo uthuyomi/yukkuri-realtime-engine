@@ -1,50 +1,59 @@
 # Yukkuri Realtime Engine
 
+A self-hosted realtime voice runtime for conversational AI. Coordinates turns, interruptions, generation and playback around STT, LLM and TTS, with a Japanese voice application as the supplied example.
+
 English | [日本語](README.ja.md)
 
-A self-hosted realtime voice engine/runtime for Japanese voice applications. **v0.1.0 is an early release target**, with Public API **v1**; it is not a production-maturity claim.
+[![Release v0.1.0](https://img.shields.io/badge/release-v0.1.0-blue)](https://github.com/uthuyomi/yukkuri-realtime-engine/releases/tag/v0.1.0)
+[![Quality](https://github.com/uthuyomi/yukkuri-realtime-engine/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/uthuyomi/yukkuri-realtime-engine/actions/workflows/quality.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-## What is it?
+**Current release: [v0.1.0](https://github.com/uthuyomi/yukkuri-realtime-engine/releases/tag/v0.1.0)** · Public API **v1** · **Windows x64** engine · Early release for local development.
 
-The engine coordinates microphone input, endpoint decisions, transcription, conversation context, streaming language-model responses and speech playback. Clients use HTTP/WebSocket APIs or the TypeScript/Python SDKs; the browser example is one client, not the engine's architecture.
+[Start here](docs/quickstart.md) · [Architecture](docs/architecture.md) · [SDKs](#sdks) · [Documentation](#documentation)
 
-AquesTalk is the current flagship local TTS provider. STT, LLM, TTS, turn detection and backchannel decisions have distinct Go provider boundaries. The supplied entry point uses local whisper.cpp and Smart Turn, plus an **external OpenAI LLM service** when configured. Self-hosting the runtime does not make that whole configuration local.
+The runtime keeps conversation state aligned with what the client has actually played, pauses on speech onset, and either resumes or cancels the response after an interruption decision. HTTP/WebSocket APIs and TypeScript/Python SDKs connect your client to that session lifecycle.
 
-## Features
+The supplied setup combines local whisper.cpp, Smart Turn and AquesTalk with an **external OpenAI LLM service**. Providers have distinct Go interfaces; self-hosting the runtime does not make this whole configuration local. AQUEST assets, models and credentials are obtained separately.
 
-- Client VAD integration, continuous PCM input and server Smart Turn/dynamic endpointing.
-- Persistent whisper.cpp transcription with CPU/CUDA selection; authoritative final transcripts, not incremental partial STT.
-- LLM streaming, semantic speech chunks, normalized TTS input and PCM streaming.
-- Generation-scoped cancellation, barge-in, tentative pause, false-interruption recovery and heuristic backchannel handling.
-- Bounded speculative STT/LLM work, published only after formal promotion.
-- Multi-turn conversation with playback-aware history; source-frame credit-v1 backpressure.
-- Browser AudioWorklet ring buffer/resampler, capability discovery and correlated event observability.
+## Demo
+
+A real Browser Voice demo recording will be added by the owner. You can run the [browser example](examples/typescript/browser-voice/README.md) after [provider setup](docs/quickstart.md).
+
+<!-- Replace this placeholder with the owner's verified Browser Voice recording. Do not link media until it exists. -->
+
+## Highlights
+
+- **Realtime interaction:** client VAD, Smart Turn/dynamic endpointing, barge-in, false-interruption recovery and heuristic backchannel handling.
+- **Generation lifecycle:** bounded speculative STT/LLM work, promotion behind a commit barrier, generation-scoped cancellation and multi-turn conversation state.
+- **Audio runtime:** semantic speech chunks, PCM streaming, source-frame credit-v1 flow control and playback-aware history, with an AudioWorklet client.
+- **Integration:** HTTP/WebSocket Public API v1, TypeScript SDK, Python SDK/CLI, a browser example and correlated session/generation events.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-  Mic[Client microphone + VAD] --> Input[Server PCM input / endpointing]
-  Input <--> Turn[Smart Turn sidecar]
-  Input --> STT[whisper.cpp runtime]
-  STT --> Conv[Conversation runtime]
-  Conv --> LLM[LLM stream]
-  LLM --> Speech[Semantic chunks / normalization]
-  Speech --> TTS[TTS provider]
-  TTS --> PCM[PCM / credit / source timeline]
-  PCM --> Player[Client Worklet / playback]
-  Player -->|rendered source frames| PCM
+  Mic["Client microphone + VAD"] --> Input
+  subgraph Runtime["Realtime session runtime"]
+    Input["PCM input / endpointing"] <--> Turn["Smart Turn sidecar"]
+    Input --> STT["whisper.cpp / final STT"]
+    STT --> Conv["Conversation / generation lifecycle"]
+    Conv --> LLM["LLM stream"]
+    LLM --> Speech["Speech chunks / normalization"]
+    Speech --> TTS["TTS provider"]
+    TTS --> PCM["PCM / credit-v1 / playback timeline"]
+    Input -.-> Spec["Speculative STT + LLM buffer"]
+    Spec -.->|commit barrier / promotion| Conv
+    Input -.-> Interrupt["Interruption / backchannel decision"]
+    Interrupt -.->|cancel or recover| Conv
+    Interrupt -.->|pause or resume| PCM
+  end
+  PCM --> Player["Client AudioWorklet / playback"]
+  Player -->|source-frame ACK| PCM
   PCM -->|played history| Conv
-  Input -.-> Spec[Bounded speculation / commit barrier]
-  Spec -.-> Conv
-  Mic -.-> Interrupt[Pause / interruption / cancellation]
-  Interrupt -.-> PCM
-  Interrupt -.-> Conv
-  Input -.-> Events[Correlated events / capabilities]
-  PCM -.-> Events
 ```
 
-[Architecture: English](docs/architecture.md) · [日本語](docs/architecture.ja.md)
+Solid arrows show the main voice path and playback feedback; dotted arrows show concurrent speculation and interruption control. Speculation cannot publish text or audio before promotion. Provider nodes show integration boundaries, not a single process. [Detailed architecture](docs/architecture.md).
 
 ## Quick Start
 
@@ -56,7 +65,7 @@ From a clone, a provider-free build is possible:
 git clone https://github.com/uthuyomi/yukkuri-realtime-engine.git
 cd yukkuri-realtime-engine
 go build -o dist/engine.exe ./cmd/engine
-Copy-Item .env.example .env
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 # Configure local providers and OPENAI_API_KEY before the full voice flow.
 go run ./cmd/engine
 ```
@@ -151,6 +160,8 @@ User-reported initial real-microphone observation on **GTX 1660 6GB**, whisper.c
 | Providers | [EN](docs/providers.md) | [JA](docs/providers.ja.md) |
 | Performance | [EN](docs/performance.md) | [JA](docs/performance.ja.md) |
 | Troubleshooting | [EN](docs/troubleshooting.md) | [JA](docs/troubleshooting.ja.md) |
+
+[TypeScript SDK](docs/typescript-sdk.md) · [Python SDK](docs/python-sdk.md) · [CLI](docs/cli.md)
 
 [Contributing/tests](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md) · [Release preparation report](docs/release-quality.md)
 
