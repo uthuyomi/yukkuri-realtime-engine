@@ -20,9 +20,9 @@ The supplied setup combines local whisper.cpp, Smart Turn and AquesTalk with an 
 
 Real Browser Voice session using the realtime pipeline: microphone input → VAD/turn detection → STT → LLM → AquesTalk → streaming playback.
 
-The recording also demonstrates barge-in: the user interrupts an active response, the current generation is stopped, and the conversation continues with a new response.
+https://github.com/user-attachments/assets/2f87e10d-6b65-4d4e-8a04-acc1c281834c
 
-[Watch the Browser Voice demo](docs/assets/yukkuri-realtime-engine-demo.mp4)
+The recording also demonstrates barge-in: the user interrupts an active response, the current generation is stopped, and the conversation continues with a new response.
 
 The Browser Voice example also displays per-turn STT/LLM/Server TTFA measurements and interruption state.
 
