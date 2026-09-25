@@ -1,14 +1,26 @@
 <!doctype html>
-<html lang="ja"><meta charset="utf-8"><title>Yukkuri SDK Browser Voice</title>
+<html lang="ja">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Browser Voice | Yukkuri Realtime Engine</title><link rel="stylesheet" href="./style.css"></head>
 <body>
-<h1>Yukkuri SDK Browser Voice</h1>
-<p>リポジトリrootをlocalhost HTTPで配信してください。SDK build、Engine、SmartTurn、STT、LLM、TTSが必要です。</p>
-<p>この例はSilero/ONNXを下記固定バージョンのCDNから取得します。アプリ配布時は同じassetを自前で配信できます。</p>
-<label>Engine URL <input id="url" value="http://127.0.0.1:8765"></label>
-<button id="connect">Connect / Start Audio</button><button id="mic" disabled>Start Microphone</button>
-<button id="stop" disabled>Stop Microphone</button><button id="close" disabled>Close</button>
-<form id="text"><input id="prompt" value="こんにちは"><select id="output"><option>text</option><option>audio</option></select><button>Send text</button></form>
-<pre id="status">Disconnected</pre><pre id="transcript"></pre><pre id="response"></pre>
+<header><div><h1>Browser Voice</h1><span class="subtitle">Yukkuri Realtime Engine · 開発・検証ツール</span></div><span id="status" class="badge" role="status">未接続</span></header>
+<section class="connection" aria-label="接続と音声入力">
+<label>Engine URL <input id="url" type="url" value="http://127.0.0.1:8765"></label>
+<button id="connect" class="primary">接続</button><button id="mic" disabled>マイク開始</button><button id="stop" disabled>マイク停止</button><button id="close" disabled>切断</button>
+</section>
+<p id="notice" role="status"></p>
+<main>
+<section class="conversation"><div class="section-heading"><h2>会話</h2><span id="turn-count">0 turns</span></div>
+<div id="conversation"><p class="empty">接続してマイクを開始するか、テキストを送信してください。<br>確定した会話と計測結果がここに表示されます。</p></div>
+<form id="text"><label for="prompt">テキスト入力</label><textarea id="prompt" rows="2" required placeholder="メッセージを入力">こんにちは</textarea><div class="send-row"><label>応答 <select id="output"><option value="audio">音声とテキスト</option><option value="text">テキストのみ</option></select></label><button id="send" class="primary" disabled>送信</button></div></form>
+</section>
+<aside aria-label="Latency metrics"><div class="section-heading"><h2>レイテンシ</h2><span>このページの履歴</span></div>
+<h3>Server TTFA 統計</h3><dl id="aggregate" class="aggregate"></dl>
+<p class="note">completed の計測済み音声turnのみ。p50 / p95 は nearest-rank 方式。</p>
+<h3>Turn履歴 <small>最新順</small></h3><div class="table-scroll"><table><thead><tr><th>Turn</th><th>TTFA</th><th>STT</th><th>LLM</th><th>TTS</th><th>状態</th></tr></thead><tbody id="history"></tbody></table></div>
+<details class="definitions"><summary>計測値の定義</summary><p>サーバー値はイベント生成時刻の差です。EOTは input_audio.turn の complete（サーバー発話確定通知）を起点とします。</p><p>STT: EOT → final通知。LLM: final通知 → 最初のtext delta。Server TTFA: EOT → 最初のaudio chunk開始通知（合成後）。TTS開始時刻は公開されていないため、TTSの内訳は未計測です。</p><p>Client TTFAはEOT通知受信 → 最初のPCM受信。実際の可聴開始ではありません。Audible TTFAは未計測です。割り込みは同じinterruption IDのsuspected → confirmed通知です。</p><p>totalはEOT → 生成終了通知。テキスト入力ではgeneration.createdが起点です。再生完了時間ではありません。— は未計測または対象外。表示のみ丸め、内部値は保持します。</p></details>
+</aside>
+</main>
+<footer><details><summary>実行環境について</summary><p>リポジトリのルートをlocalhostのHTTPサーバーで配信してください。SDKのbuild、Engine、SmartTurn、STT、LLM、TTSが必要です。この例はSilero / ONNXを固定バージョンのCDNから取得します。履歴はページ内のメモリにのみ保持し、再読み込みで消去されます。</p></details></footer>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"></script>
 <script type="module" src="./main.js"></script>
