@@ -1,5 +1,7 @@
 # STT performance and reproducible measurements
 
+> Historical STT implementation/CPU measurement record. Statements about unavailable CUDA hardware describe that earlier run, not current project capability. For the later user-reported GTX 1660 real-microphone observation, see [performance](performance.md). Step 10 does not independently reproduce that observation.
+
 ## What was actually measured
 
 Windows x64, Intel Core i7-1260P (12 cores / 16 logical processors), Intel Iris Xe, model `ggml-small.bin` (487,601,967 bytes), Japanese (`ja`), 4 inference threads, best-of 5 / beam 5. No NVIDIA GPU, `nvidia-smi`, `nvcc` or CUDA Toolkit was available. Target **GTX 1660 measurements are 未実施**. This is not an RTX3060 run.

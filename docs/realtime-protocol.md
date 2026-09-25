@@ -1,11 +1,13 @@
 # Realtime WebSocket protocol v1
 
+English | [日本語](realtime-protocol.ja.md)
+
 Connect to `/v1/realtime`. The first server event is `session.created`. Internal Turn, Interruption, Speculation, Conversation and Audio Runtime state machines remain independent behind this protocol.
 
 ## Envelope, correlation and binary framing
 
 ```json
-{"type":"generation.created","event_id":"evt_...","session_id":"sess_...","timestamp":"2026-09-24T12:00:00Z","related_event_id":"client_1","generation_id":"gen_...","data":{"voice":"f1","speed":100}}
+{"type":"generation.created","event_id":"evt_...","session_id":"sess_...","timestamp":"2026-09-24T12:00:00Z","related_event_id":"client_1","generation_id":"gen_...","data":{"voice":"f1","speed":1.0}}
 ```
 
 Server-required fields: `type` string, `event_id` unique opaque string, `session_id` string, `timestamp` RFC3339 UTC string, `data` object. Optional envelope fields: `generation_id`, `related_event_id`. Turn/conversation/speculation/interruption IDs stay in event data for compatibility. Timestamps are for observability/correlation, never sample-accurate playback.

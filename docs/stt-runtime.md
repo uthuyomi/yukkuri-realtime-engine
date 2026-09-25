@@ -1,5 +1,7 @@
 # STT Runtime
 
+> Historical STT implementation/CPU measurement record. Statements about unavailable CUDA hardware describe that earlier run, not current project capability. For the later user-reported GTX 1660 real-microphone observation, see [performance](performance.md). Step 10 does not independently reproduce that observation.
+
 The Engine defaults to **persistent whisper.cpp, final-only, `STT_DEVICE=auto`, small, Japanese**. SDK/CLI device selection is deliberately absent. `Provider.Transcribe(ctx, Request)` remains compatible; no partial transcript is manufactured.
 
 ## Architecture and choice

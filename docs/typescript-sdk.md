@@ -14,7 +14,7 @@ npm test
 npm pack
 ```
 
-No npm publication is performed. In an application, run `npm install C:/source/yukkuri-realtime-engine/sdk/typescript` after building it, or install the generated `.tgz`. The package includes dist JS, declarations and the Worklet asset. Source/test/build tooling is not needed at runtime. If your application's bundler moves assets, copy the exported `@yukkuri-realtime/client/audio-worklet.js` and pass its deployed URL to the player.
+No npm publication is performed. In an application, run `npm install /path/to/yukkuri-realtime-engine/sdk/typescript` after building it, or install the generated `.tgz`. The package includes dist JS, declarations and the Worklet asset. Source/test/build tooling is not needed at runtime. If your application's bundler moves assets, copy the exported `@yukkuri-realtime/client/audio-worklet.js` and pass its deployed URL to the player.
 
 Exports: package root for core, `/browser` for optional browser helpers, `/audio-worklet.js` for the Worklet asset. There is no redundant `/node` implementation: Node and browser share the same core. CommonJS consumers can use dynamic `import()`; a CJS bundle is not supplied.
 

@@ -18,7 +18,7 @@ URL precedence: explicit `--url` → `YUKKURI_ENGINE_URL` → `http://127.0.0.1:
 
 ```powershell
 yukkuri --url http://127.0.0.1:8765 health
-yukkuri speak "こんにちは" --voice f1 --speed 100 --output hello.wav
+yukkuri speak "こんにちは" --voice f1 --speed 1.0 --output hello.wav
 yukkuri --timeout 150 transcribe input.wav
 ```
 

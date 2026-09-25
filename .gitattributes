@@ -1,0 +1,14 @@
+* text=auto
+/internal/providers/tts/aquestalk/aqk2k_win export-ignore
+/internal/providers/tts/aquestalk/aqtk1_win export-ignore
+/runtime export-ignore
+/.env export-ignore
+/.env.* export-ignore
+/.env.example -export-ignore
+/.venv* export-ignore
+/dist export-ignore
+**/node_modules export-ignore
+**/__pycache__ export-ignore
+/sdk/typescript/dist export-ignore
+/sdk/python/build export-ignore
+/sdk/python/dist export-ignore

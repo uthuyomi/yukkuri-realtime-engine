@@ -34,5 +34,13 @@ sdk/python/dist/
 sdk/python/build/
 *.egg-info/
 .venv/
+.venv-*/
+/dist/
+*.pyc
+# Other local inference/model artifacts are never source distributions.
+/runtime/
+*.onnx
+*.gguf
+*.safetensors
 *.tgz
 *.whl

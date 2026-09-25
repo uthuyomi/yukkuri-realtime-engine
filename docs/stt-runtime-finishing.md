@@ -1,5 +1,7 @@
 # ⑨ STT Runtime Finishing / Performance 実装報告
 
+> Historical STT implementation/CPU measurement record. Statements about unavailable CUDA hardware describe that earlier run, not current project capability. For the later user-reported GTX 1660 real-microphone observation, see [performance](performance.md). Step 10 does not independently reproduce that observation.
+
 今回の実装は、既存provider boundaryを保ったままwhisper.cppをEngine所有の常駐runtimeへ変更するもの。CPU実行・Windowsビルド・回帰試験・変更前後の合成音声latency計測を実施した。**GTX 1660/CUDA実機性能、日本語実音声の精度は未実施**。Streamingはupstream調査の結果、今回のboundaryへ安全に導入できるincremental方式ではないと判断し、偽partialを追加していない。commit / push / publish / Releaseは行っていない。
 
 ## 1. 変更ファイル一覧
