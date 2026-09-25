@@ -8,7 +8,7 @@
 
 Windows adapterはAquesTalk1 DLLを動的ロードし、AqKanji2Koeで日本語textを変換してmono 8 kHz WAVを返します。既定声種はf1、設定声種はf1/f2/f3/m1/m2/r1/dvd/imd1/jgr。標準起動プログラムは全設定DLLと辞書を必要とします。[配置先](quickstart.ja.md)を参照してください。
 
-AquesTalkとAqKanji2Koeは第三者のプロプライエタリソフトウェアです。このリポジトリからDLL、辞書、SDKライブラリ／ヘッダー、キーなどの制限付きSDK資産を再配布しません。各自で取得し、AQUESTの条件に従ってください。独自コードとプロジェクト作成文書の[MIT License](../LICENSE)は、これらの資産の権利を付与せず、AQUESTのライセンスを変更しません。検証済みのソース候補と整理後のローカル到達可能履歴には含まれません。GitHubのmainにはAqKanji2Koe資産を含む旧履歴が残っており、リモートの整理・公開には別途承認が必要です。[リリース報告](release-quality.md)を参照してください。配布元の[AquesTalk製品ページ](https://www.a-quest.com/products/aquestalk.html)、[AqKanji2Koe製品ページ](https://www.a-quest.com/products/aqkanji2koe.html)とそのライセンス案内を確認してください。この文書で個別の法的権利を判断しません。
+AquesTalkとAqKanji2Koeは第三者のプロプライエタリソフトウェアです。このリポジトリからDLL、辞書、SDKライブラリ／ヘッダー、キーなどの制限付きSDK資産を再配布しません。各自で取得し、AQUESTの条件に従ってください。独自コードとプロジェクト作成文書の[MIT License](../LICENSE)は、これらの資産の権利を付与せず、AQUESTのライセンスを変更しません。検証済みのソース候補と整理後のローカル到達可能履歴には含まれません。Step 10-DではGitHubの公開mainも置換し、これらの資産が到達不能であることを新規cloneで確認しました。GitHub内部の保存物やキャッシュの消去を保証するものではありません。[リリース報告](release-quality.md)を参照してください。配布元の[AquesTalk製品ページ](https://www.a-quest.com/products/aquestalk.html)、[AqKanji2Koe製品ページ](https://www.a-quest.com/products/aqkanji2koe.html)とそのライセンス案内を確認してください。この文書で個別の法的権利を判断しません。
 
 `speed`は倍率です。省略／0は100%、正数は100倍して整数のpercentに変換し、50〜300%を受け付けます。通常速度は`100`でなく`1.0`です。未知の声種、変換失敗、native合成失敗は情報を制限したgeneration errorになります。変換出力バッファは8192 bytesで、長文や複雑な入力は変換に失敗する場合があります。native呼出しは同期処理で、実行途中のDLL処理をcontext cancelで中断できません。DLLの並行動作は利用者の許諾済みbuildで確認が必要です。
 

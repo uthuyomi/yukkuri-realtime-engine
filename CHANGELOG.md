@@ -18,14 +18,14 @@ This file describes verified capabilities, not fabricated prior release history.
 
 ### Licensing
 
-- Added the standard [MIT License](LICENSE) for original project code and project-authored documentation unless otherwise noted, with Copyright (c) 2026 uthuyomi as explicitly designated by the owner. Third-party components retain their own terms, including proprietary AQUEST assets obtained separately. Local AQUEST history cleanup completed in Step 10-C; remote cleanup/publication remains deferred.
+- Added the standard [MIT License](LICENSE) for original project code and project-authored documentation unless otherwise noted, with Copyright (c) 2026 uthuyomi as explicitly designated by the owner. Third-party components retain their own terms, including proprietary AQUEST assets obtained separately. Local AQUEST history cleanup completed in Step 10-C; Step 10-D replaced advertised GitHub main. No backend/cache deletion is claimed; release/publication remains deferred.
 
 ### Corrected during release preparation
 
 - Documented AquesTalk speed as a ratio (`1.0`), matching implementation, instead of invalid `100` examples.
 - Removed raw .env parser errors from startup logs because they can quote credential-bearing input.
 - Prevented a queued STT request from reloading/invoking a worker during runtime shutdown before its asynchronous cancellation callback runs.
-- Removed AqKanji2Koe vendor assets from the Git index while preserving local files; strengthened source packaging checks. Step 10-C subsequently removed the 17 vendor paths from local reachable history; remote main remains unchanged and requires separate cleanup authorization.
+- Removed AqKanji2Koe vendor assets from the Git index while preserving local files; strengthened source packaging checks. Step 10-C subsequently removed the 17 vendor paths from local reachable history; Step 10-D replaced advertised remote main and verified a fresh clone.
 
 ### Known limitations
 

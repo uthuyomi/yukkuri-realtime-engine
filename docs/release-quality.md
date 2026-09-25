@@ -74,7 +74,7 @@ Confirmed loopback bind, shared HTTP/WS Origin policy, request IDs, fixed public
 
 ## CI and distribution
 
-Prepared `.github/workflows/quality.yml`: Windows Go build/tests and narrow vet exception; TS/browser/package tests; Python SDK/CLI/wheel; Linux portable-core race; Linux fake-detector tests with pinned dependencies and no ONNX model. Jobs use no private API key, proprietary SDK, NVIDIA GPU or downloaded whisper model. Workflow execution on GitHub is not performed or claimed. Read-only contents permission, concurrency cancellation and job timeouts are set. No release/upload/publish job is added.
+Prepared `.github/workflows/quality.yml`: Windows Go build/tests and narrow vet exception; TS/browser/package tests; Python SDK/CLI/wheel; Linux portable-core race; Linux fake-detector tests with pinned dependencies and no ONNX model. Jobs use no private API key, proprietary SDK, NVIDIA GPU or downloaded whisper model. At the initial Step 10 audit, this workflow had not run; Step 10-D below records actual GitHub execution and results. Read-only contents permission, concurrency cancellation and job timeouts are set. No release/upload/publish job is added.
 
 Use [CONTRIBUTING](../CONTRIBUTING.md) checks, then `python scripts/release_check.py --archive dist/source-candidate.zip`. Build Windows engine with `go build -trimpath -o dist/engine.exe ./cmd/engine`. npm tarball and Python wheel are separate SDK packages; never zip the whole working directory or runtime. Users supply AQUEST, whisper executables/models, Smart Turn model/dependencies and external credentials separately. A release must verify the actual artifact list/checksums and repository license before publication.
 
@@ -84,11 +84,11 @@ Start at either README, follow paired quickstart/configuration/provider/troubles
 
 ## Remaining release gates
 
-- Local reachable history is clean after Step 10-C. GitHub main still references contaminated history; remote replacement and any GitHub retention cleanup require separate owner authorization/review. The local origin configuration was removed to prevent automatic refetch. Step 10 working changes remain uncommitted; review and an authorized commit are still needed before publication.
-- Full default Windows vet retains its documented native-pointer warning; the exception needs maintainer acceptance. Portable-core race job is prepared but not executed locally/GitHub in this task.
+- Step 10-D committed the prepared work and replaced advertised GitHub main. Fresh-clone validation confirms restricted assets are unreachable from main. Backend/cache retention and other clones are not certified clean; owner review remains required before Step 10-E release actions.
+- Full default Windows vet retains its documented native-pointer warning. Step 10-D satisfied the owner's RC exception conditions: the documented narrow split passed on GitHub without other vet failures, and Linux portable-core race passed. Native DLL internals are outside that race coverage.
 - Existing installed whisper CPU cancellation/reaping and Smart Turn model smoke were run successfully. Proprietary TTS, real microphone, CUDA inference and fresh external download/install reproduction were not rerun. External model/API availability is not guaranteed by source defaults.
 
-All authorized repository preparation should be reviewed before any commit. No commit, push, force-push, GitHub Release, npm publish or PyPI publish has been performed.
+Step 10-D authorized the commits and explicit-lease replacement recorded below. No tag, GitHub Release, asset upload, npm publish or PyPI publish has been performed.
 
 ## Completion gate accounting
 
@@ -100,16 +100,16 @@ All authorized repository preparation should be reviewed before any commit. No c
 | CHANGELOG, CONTRIBUTING, SECURITY | Written |
 | LICENSE | **Complete: standard MIT; Copyright (c) 2026 uthuyomi, explicitly designated by the owner** |
 | .env.example and .gitignore | Verified against source environment names and actual ignored assets |
-| Proprietary/sensitive tracked-file audit | Local reachable history cleaned in Step 10-C; local assets preserved; remote historical exposure remains |
+| Proprietary/sensitive tracked-file audit | Local and advertised remote main history cleaned and fresh-clone verified; local assets preserved; backend/cache retention not certified |
 | Go tests / vet | Tests passed; full vet executed with known native-pointer failure; documented split passed |
 | TS build/tests/package / Python SDK/CLI/wheel / browser unit tests | Passed |
 | Relevant reliability regression tests | Added and passed; STT shutdown fix exercised 100 repetitions |
 | Security review | Completed within local-development threat model; two targeted fixes above |
-| CI | Prepared, not executed on GitHub; no release/publish automation |
+| CI | Step 10-D run 36092044365 passed Windows, Linux race and fake-detector jobs; final reporting-tip run recorded in handoff; no release/publish automation |
 | Clean build / source candidate | Asset-free extracted source build verified; no restricted assets in source candidate |
 | Clean-room navigation / EN/JA consistency | Commands, configuration identifiers/defaults, event fields, performance rows and local links checked |
-| Environment-dependent validation | Three installed-provider opt-in smokes passed separately; race, CUDA, proprietary TTS and real-device browser exclusions documented |
-| Public release readiness | **Blocked by remote historical-asset cleanup/publication authorization; remaining quality gates above still require review** |
+| Environment-dependent validation | Three installed-provider opt-in smokes passed earlier; Linux portable-core race passed in Step 10-D CI; CUDA, proprietary TTS and real-device browser exclusions documented |
+| Public release readiness | **Technical Step 10-D gates passed at code/CI tip; latest reporting-tip CI and owner review govern Step 10-E. No release authorization yet.** |
 
 Suggested commit message after review (not executed):
 
@@ -131,7 +131,9 @@ Final validation: release guard unit tests passed (4); `python scripts/release_c
 
 Step 10-B performed no local asset deletion, commit, tag, push, release, publish or history rewrite. Local-history cleanup was subsequently authorized and performed in Step 10-C below; remote cleanup remains deferred.
 
-## Step 10-C: local history cleanup
+## Step 10-C: local history cleanup (historical handoff)
+
+This section records the state at Step 10-C. Step 10-D below supersedes its uncommitted-work, remote and CI status.
 
 ### Backup and preservation
 
@@ -281,7 +283,7 @@ c4dae7d feat: add realtime audio streaming over WebSocket
 e2a2008 feat: add engine core and AquesTalk TTS provider
 ```
 
-## Working-tree inventory at handoff
+## Step 10-C working-tree inventory (historical)
 
 After Step 10-C, vendor staged deletions are gone because the rewritten base does not track them; local files remain intact.
 
@@ -331,3 +333,65 @@ After Step 10-C, vendor staged deletions are gone because the rewritten base doe
 ?? scripts/release_check.py
 ?? scripts/test_release_check.py
 ```
+
+## Step 10-D: committed preparation and advertised remote replacement
+
+The owner authorized committing the prepared work, restoring origin, an explicit-lease replacement of main against the known old SHA, CI observation, and minimal evidence-backed CI fixes with normal subsequent pushes. Tags, GitHub Releases, asset uploads and npm/PyPI publication remain unauthorized and were not performed.
+
+### Preflight and commits
+
+Starting HEAD was exactly bab0602e695918b680c21756f42b907f828aa3cb. Status matched the Step 10-C inventory and every candidate file matched that step's reviewed archive byte-for-byte. LICENSE identity, vendor tracking exclusion, secret/path guard and all changed-file groups were checked before explicit path-based staging. The final prepared tree was preserved by these commits:
+
+| Commit | Purpose |
+| --- | --- |
+| 4cffe93a118d5a943b82f11d6565018f7caf7264 | fix(runtime): harden startup logging and STT shutdown, with corresponding tests |
+| e5f4543b28027d5f28e9c19ad8be67f337fb75fe | feat(browser): improve realtime voice demo and history tooling |
+| 146159261da13432dcc37c0b1b026c094c31cbaa | chore(release): prepare v0.1.0 documentation and quality gates |
+| 5fdf393995d681bedb5c451b147b077960605c31 | fix(ci): preserve LF in generated protocol artifacts |
+
+Each staged diff was reviewed before committing. The source tree was clean after the prepared commits. The final reporting-only descendant updates this report and stale remote-status prose; its own SHA cannot be embedded in itself. The exact final local/remote tip and final archive checksum are recorded in the external dist/step10d-handoff.json and the task handoff. Use git rev-parse HEAD to identify that reporting commit, not the earlier code/CI tip above.
+
+### Local tests and committed archives
+
+Post-commit go test ./... and documented split vet passed. TypeScript strict build and 20 tests, installed package smoke, 30 browser tests, 13 isolated Python SDK/CLI tests, 4 release-guard tests, candidate/committed-HEAD guard, Markdown/local links and git diff --check passed. No provider/hardware tests were fabricated or rerun for these changes.
+
+Actual committed HEAD archives were generated with git -c core.eol=lf archive, avoiding Windows native CRLF conversion. Every file was compared byte-for-byte to its committed blob. LICENSE, README EN/JA and intended source/docs were present; vendor assets, .env, models, dependencies, .git and backups were excluded. Both archives contained 184 files and built ./cmd/engine from extracted source:
+
+| Committed source | Artifact | SHA-256 |
+| --- | --- | --- |
+| 146159261da13432dcc37c0b1b026c094c31cbaa | dist/step10d-1461592/source-candidate-lf.zip | f6b6cb559f2941f610d9b6f7f38c258fb43dd9b8cab1449118089ce85bb6c5b6 |
+| 5fdf393995d681bedb5c451b147b077960605c31 | dist/step10d-5fdf393/source-candidate.zip | f23e0dc82525ebda6d0947712390267a3ec312810b4b08a02b007d501df78496 |
+
+A further archive from the final reporting commit is independently regenerated at handoff, with its checksum beside the artifact and in dist/step10d-handoff.json. This avoids the impossible self-reference of embedding an archive's own digest in a document inside it. The old uncommitted Step 10-C ZIP is not final evidence.
+
+### Remote mutation and public-clone evidence
+
+Origin was restored to https://github.com/uthuyomi/yukkuri-realtime-engine.git. Read-only verification, repeated immediately before push, returned exactly 631962e75b03362f423e7c2f895977c0c472cc39 for refs/heads/main.
+
+The exact authorized replacement command was:
+```powershell
+git push --force-with-lease=refs/heads/main:631962e75b03362f423e7c2f895977c0c472cc39 origin main:refs/heads/main
+```
+It succeeded with the forced update 631962e...1461592. Read-only ls-remote then confirmed 146159261da13432dcc37c0b1b026c094c31cbaa. No other ref/tag was pushed. The CI fix used git push origin main:refs/heads/main, a normal fast-forward from 1461592 to 5fdf393; no second force push was used.
+
+A fresh GitHub single-branch clone at ../yukkuri-step10c-backup-20260925-122317/step10d-public-clone (relative to the original checkout root) was obtained without local ignored files. Its initial scan covered 15 commits / 299 blobs, with no vendor paths, known restricted blobs or credential signatures. The .env.example path match was the reviewed template. LICENSE/README EN/JA, release guard and clean engine build passed. All 15 known vendor blobs, including dictionary 141d456ba078062f112bf65609ac864ec36f1851, are unreachable from advertised main. Integration source remains present. Final handoff repeats verification at the reporting tip.
+
+This is a verified advertised-main reachability claim, not GitHub backend/cache garbage collection or erasure from other clones. Existing private backups remain intact; all 66 original local proprietary files retain their SHA-256 and stay ignored/untracked.
+
+### CI evidence and bounded fix
+
+Initial [Quality run 36091829189](https://github.com/uthuyomi/yukkuri-realtime-engine/actions/runs/36091829189) failed on Windows TestPublishedSchemaMatchesCode; Linux portable-race and sidecar passed. Windows checkout converted generated JSON to CRLF, unlike the generator's LF output. A fresh local clone configured with core.autocrlf=true reproduced both the JSON schema mismatch and the analogous generated TypeScript mismatch. Narrow .gitattributes eol=lf rules for docs/protocol/*.schema.json and sdk/typescript/src/client-events.ts made both strict checks pass on a fresh checkout. No comparison was weakened, runtime behavior changed or analyzer disabled.
+
+Follow-up [Quality run 36092044365](https://github.com/uthuyomi/yukkuri-realtime-engine/actions/runs/36092044365) targets 5fdf393995d681bedb5c451b147b077960605c31.
+
+| Job | Result |
+| --- | --- |
+| windows: source guard, Go tests/build, split vet, TypeScript/browser/package, Python SDK/CLI/wheel | Success |
+| portable-race: Linux portable core under -race | Success |
+| sidecar: Linux fake-detector tests without model | Success |
+
+The final reporting-only push has its own Quality run; its URL and job results are recorded in the final handoff/evidence manifest so this report does not recursively generate additional reporting commits.
+
+### Release boundary
+
+No tag, release, asset upload or package publication has occurred. Keep Step 10-E gated until the latest CI succeeds and the owner reviews this preparation. The native Windows unsafe.Pointer warning remains explicitly documented; the RC exception is limited to that analyzer in the adapter/importing engine and does not imply unrestricted vet success. Linux portable-core race does not cover native DLL internals. Real microphone, proprietary synthesis, CUDA and hardware soak remain outside this task. Backend/cache retention is not certified; old clones and backups must not be republished.
