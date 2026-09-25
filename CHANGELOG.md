@@ -2,7 +2,7 @@
 
 This file describes verified capabilities, not fabricated prior release history. Public protocol v1 is separate from the engine/package version.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-09-25
 
 ### Added
 

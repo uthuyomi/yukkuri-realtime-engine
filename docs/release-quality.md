@@ -84,7 +84,7 @@ Start at either README, follow paired quickstart/configuration/provider/troubles
 
 ## Remaining release gates
 
-- Step 10-D committed the prepared work and replaced advertised GitHub main. Fresh-clone validation confirms restricted assets are unreachable from main. Backend/cache retention and other clones are not certified clean; owner review remains required before Step 10-E release actions.
+- Step 10-D committed the prepared work and replaced advertised GitHub main. Fresh-clone validation confirms restricted assets are unreachable from main. Backend/cache retention and other clones are not certified clean. The owner subsequently authorized Step 10-E publication; Step 10-E.1 is limited to this metadata commit, normal push and CI verification, and stops before tagging for review of the new release target.
 - Full default Windows vet retains its documented native-pointer warning. Step 10-D satisfied the owner's RC exception conditions: the documented narrow split passed on GitHub without other vet failures, and Linux portable-core race passed. Native DLL internals are outside that race coverage.
 - Existing installed whisper CPU cancellation/reaping and Smart Turn model smoke were run successfully. Proprietary TTS, real microphone, CUDA inference and fresh external download/install reproduction were not rerun. External model/API availability is not guaranteed by source defaults.
 
@@ -109,7 +109,7 @@ Step 10-D authorized the commits and explicit-lease replacement recorded below. 
 | Clean build / source candidate | Asset-free extracted source build verified; no restricted assets in source candidate |
 | Clean-room navigation / EN/JA consistency | Commands, configuration identifiers/defaults, event fields, performance rows and local links checked |
 | Environment-dependent validation | Three installed-provider opt-in smokes passed earlier; Linux portable-core race passed in Step 10-D CI; CUDA, proprietary TTS and real-device browser exclusions documented |
-| Public release readiness | **Technical Step 10-D gates passed at code/CI tip; latest reporting-tip CI and owner review govern Step 10-E. No release authorization yet.** |
+| Public release readiness | **Step 10-D completed: local and GitHub main aligned at aadecee5fcab0002b8a888f9f415c6ee6d1490e6; CI run 36092373327 passed every required job. The owner subsequently authorized Step 10-E publication, whose pre-release checks stopped before tagging because metadata corrections required a new commit. No v0.1.0 tag or GitHub Release exists yet. Step 10-E.1 verifies the new commit and CI, then stops for owner review before Step 10-E resumes at the new SHA. npm/PyPI remain unauthorized.** |
 
 Suggested commit message after review (not executed):
 
@@ -335,6 +335,8 @@ After Step 10-C, vendor staged deletions are gone because the rewritten base doe
 ```
 
 ## Step 10-D: committed preparation and advertised remote replacement
+
+Historical Step 10-D record: authorization limits and release-boundary statements below describe that step. The current Completion Gate above records the subsequent Step 10-E authorization and Step 10-E.1 metadata-only scope.
 
 The owner authorized committing the prepared work, restoring origin, an explicit-lease replacement of main against the known old SHA, CI observation, and minimal evidence-backed CI fixes with normal subsequent pushes. Tags, GitHub Releases, asset uploads and npm/PyPI publication remain unauthorized and were not performed.
 
