@@ -169,9 +169,19 @@ func TestBoundedRuntimeQueueAndShutdownCancellation(t *testing.T) {
 	c.Device = "cpu"
 	c.QueueCapacity = 2
 	entered := make(chan struct{})
+	var inferences atomic.Int32
+	var loads atomic.Int32
 	p, _ := newRuntime(context.Background(), c, func(context.Context, RuntimeConfig, string) (worker, error) {
-		return &fakeWorker{fn: func(ctx context.Context) (*stt.Result, error) { close(entered); <-ctx.Done(); return nil, ctx.Err() }}, nil
+		loads.Add(1)
+		return &fakeWorker{fn: func(ctx context.Context) (*stt.Result, error) {
+			if inferences.Add(1) == 1 {
+				close(entered)
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}}, nil
 	})
+	defer p.Close()
 	done := make(chan error, 2)
 	go func() { _, e := p.Transcribe(context.Background(), probeRequest()); done <- e }()
 	<-entered
@@ -188,6 +198,31 @@ func TestBoundedRuntimeQueueAndShutdownCancellation(t *testing.T) {
 		if e := <-done; !errors.Is(e, context.Canceled) {
 			t.Fatal(e)
 		}
+	}
+	if loads.Load() != 1 || inferences.Load() != 1 {
+		t.Fatalf("shutdown started queued work: loads=%d inferences=%d", loads.Load(), inferences.Load())
+	}
+}
+
+func TestCancelledRuntimeDoesNotStartInference(t *testing.T) {
+	c := DefaultRuntimeConfig()
+	c.Device = "cpu"
+	w := &fakeWorker{}
+	p, err := newRuntime(context.Background(), c, func(context.Context, RuntimeConfig, string) (worker, error) { return w, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	// The root is cancelled before the per-request AfterFunc is registered.
+	// Its callback may not run before slot acquisition; the root itself is final.
+	p.cancel()
+	for range 100 {
+		if _, err := p.Transcribe(context.Background(), probeRequest()); !errors.Is(err, context.Canceled) {
+			t.Fatal("cancelled runtime accepted inference", err)
+		}
+	}
+	if w.calls.Load() != 0 {
+		t.Fatal("inference invoked after root cancellation", w.calls.Load())
 	}
 }
 func TestCrashIsolationAndFallbackPolicy(t *testing.T) {

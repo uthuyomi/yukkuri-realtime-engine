@@ -163,6 +163,17 @@ func (p *Runtime) Transcribe(ctx context.Context, r stt.Request) (result *stt.Re
 		return nil, ctx.Err()
 	}
 	defer func() { <-p.slot }()
+	// AfterFunc cancellation is asynchronous. A queued request can acquire the
+	// slot before its callback runs during shutdown; never reload/infer then.
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return nil, context.Canceled
+	}
+	if err := p.ctx.Err(); err != nil {
+		return nil, err
+	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

@@ -23,11 +23,15 @@ import (
 	httptransport "github.com/uthuyomi/yukkuri-realtime-engine/internal/transport/http"
 )
 
-func main() {
-
+func loadEnvironment() {
 	if err := godotenv.Load(); err != nil {
-		log.Printf(".env not loaded: %v", err)
+		// Parser errors can quote the offending line, including credential values.
+		log.Println(".env not loaded: file missing or invalid; check local configuration")
 	}
+}
+
+func main() {
+	loadEnvironment()
 
 	log.Println("Yukkuri Realtime Engine starting...")
 	engineContext, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
